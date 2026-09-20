@@ -87,6 +87,8 @@ def delivery_report(error, message) -> None:
 
 
 def main() -> None:
+    print(f"Connecting to Kafka at: {BOOTSTRAP_SERVERS}")
+    print(f"Publishing to topic: {TOPIC}")
     parser = argparse.ArgumentParser(
         description="Publish simulated SNCF trip-update events to Kafka."
     )
