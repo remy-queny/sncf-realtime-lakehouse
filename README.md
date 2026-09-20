@@ -28,9 +28,9 @@ docker compose up -d
 ## État
 
 - [x] Poste de développement configuré
-- [ ] Infrastructure Kafka et PostgreSQL
-- [ ] Producteur d'événements simulés
-- [ ] Producteur Java
+- [x] Infrastructure Kafka et PostgreSQL
+- [x] Producteur d'événements simulés
+- [x] Producteur Java
 - [ ] Pipeline Spark Bronze / Silver / Gold
 - [ ] PostgreSQL et Metabase
 - [ ] Tests et CI
