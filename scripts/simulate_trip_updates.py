@@ -86,6 +86,28 @@ def delivery_report(error, message) -> None:
     )
 
 
+def build_invalid_event() -> tuple[dict, str]:
+    event = build_event()
+    invalid_case = random.choice(
+        [
+            "missing_trip_id",
+            "invalid_delay_seconds",
+            "invalid_event_timestamp",
+        ]
+    )
+
+    if invalid_case == "missing_trip_id":
+        del event["trip_id"]
+
+    elif invalid_case == "invalid_delay_seconds":
+        event["delay_seconds"] = "eight minutes"
+
+    elif invalid_case == "invalid_event_timestamp":
+        event["event_timestamp"] = "not-a-timestamp"
+
+    return event, invalid_case
+
+
 def main() -> None:
     print(f"Connecting to Kafka at: {BOOTSTRAP_SERVERS}")
     print(f"Publishing to topic: {TOPIC}")
@@ -98,6 +120,11 @@ def main() -> None:
         default=10,
         help="Number of simulated events to publish. Default: 10.",
     )
+    parser.add_argument(
+        "--invalid",
+        action="store_true",
+        help="Publish intentionally invalid events for data-quality testing.",
+    )
     args = parser.parse_args()
 
     producer = Producer(
@@ -109,8 +136,13 @@ def main() -> None:
     )
 
     for _ in range(args.count):
-        event = build_event()
-        key = event["trip_id"]
+        if args.invalid:
+            event, invalid_case = build_invalid_event()
+            key = event.get("trip_id", f"invalid-{event['event_id']}")
+            print(f"Publishing invalid event: {invalid_case}")
+        else:
+            event = build_event()
+            key = event["trip_id"]
 
         producer.produce(
             topic=TOPIC,
