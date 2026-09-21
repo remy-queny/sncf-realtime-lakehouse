@@ -40,6 +40,7 @@ public final class ProducerApplication {
         String eventJson = new ObjectMapper().writeValueAsString(event);
 
         Properties properties = new Properties();
+
         properties.put(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,
                 config.bootstrapServers()
@@ -59,6 +60,10 @@ public final class ProducerApplication {
         properties.put(
                 ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG,
                 10_000
+        );
+        properties.put(
+                ProducerConfig.MAX_BLOCK_MS_CONFIG,
+                30_000
         );
         properties.put(
                 ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG,
