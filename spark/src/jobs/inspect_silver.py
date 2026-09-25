@@ -52,9 +52,13 @@ def main() -> None:
         valid.groupBy("event_id").agg(
             count("*").alias("row_count")
         ).filter(col("row_count") > 1).show(truncate=False)
+
+        print("Route and stop IDs to enrich:")
+        valid.select("route_id", "stop_id").distinct().show(
+            truncate=False
+        )
     finally:
         spark.stop()
-
 
 if __name__ == "__main__":
     main()
