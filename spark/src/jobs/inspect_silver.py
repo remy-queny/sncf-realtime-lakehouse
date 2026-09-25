@@ -39,9 +39,18 @@ def main() -> None:
 
         print("Valid events:")
         valid.select(
-            "event_id", "trip_id", "delay_seconds",
-            "delay_minutes", "event_timestamp"
+            "event_id",
+            "trip_id",
+            "route_id",
+            "line_name",
+            "stop_id",
+            "stop_name",
+            "delay_seconds",
+            "delay_minutes",
+            "event_timestamp",
         ).show(10, truncate=False)
+
+        print("Silver columns:", valid.columns)
 
         print("Rejection reasons:")
         rejected.groupBy("validation_error").agg(

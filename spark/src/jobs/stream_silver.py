@@ -27,6 +27,8 @@ SILVER_REJECTED_EVENTS_CHECKPOINT = (
     PROJECT_ROOT / "data" / "checkpoints" / "silver_rejected_events"
 )
 
+REFERENCE_ROOT = PROJECT_ROOT / "spark" / "resources" / "simulation"
+
 
 def create_spark_session() -> SparkSession:
     builder = (
@@ -52,6 +54,20 @@ def main() -> None:
     spark.sparkContext.setLogLevel("WARN")
 
     try:
+        routes = (
+            spark.read
+            .option("header", "true")
+            .csv(str(REFERENCE_ROOT / "routes.csv"))
+            .select("route_id", "line_name")
+        )
+
+        stops = (
+            spark.read
+            .option("header", "true")
+            .csv(str(REFERENCE_ROOT / "stops.csv"))
+            .select("stop_id", "stop_name")
+        )
+
         bronze_stream = (
             spark.readStream
             .format("delta")
@@ -89,6 +105,8 @@ def main() -> None:
             .filter(col("validation_error").isNull())
             .withWatermark("event_timestamp", "1 day")
             .dropDuplicatesWithinWatermark(["event_id"])
+            .join(routes, on="route_id", how="left")
+            .join(stops, on="stop_id", how="left")
             .withColumn("event_date", to_date(col("event_timestamp")))
             .select(
                 "event_id",
@@ -97,7 +115,9 @@ def main() -> None:
                 "schema_version",
                 "trip_id",
                 "route_id",
+                "line_name",
                 "stop_id",
+                "stop_name",
                 "scheduled_timestamp",
                 "estimated_timestamp",
                 "delay_seconds",
