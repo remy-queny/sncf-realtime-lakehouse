@@ -21,6 +21,7 @@ def create_spark_session() -> SparkSession:
             "spark.sql.catalog.spark_catalog",
             "org.apache.spark.sql.delta.catalog.DeltaCatalog",
         )
+        .config("spark.sql.session.timeZone", "UTC")
     )
 
     return configure_spark_with_delta_pip(builder).getOrCreate()
