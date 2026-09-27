@@ -31,6 +31,6 @@ docker compose up -d
 - [x] Infrastructure Kafka et PostgreSQL
 - [x] Producteur d'événements simulés
 - [x] Producteur Java
-- [ ] Pipeline Spark Bronze / Silver / Gold
+- [x] Pipeline Spark Bronze / Silver / Gold
 - [ ] PostgreSQL et Metabase
 - [ ] Tests et CI
