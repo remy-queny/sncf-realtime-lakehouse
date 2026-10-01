@@ -9,7 +9,7 @@ import java.util.concurrent.ThreadLocalRandom;
 public final class TripUpdateEventFactory {
 
     private static final List<SimulationTemplate> SIMULATION_TEMPLATES = List.of(
-            new SimulationTemplate("TRAIN-O-001", "H", "stop_87271007", 480),
+            new SimulationTemplate("TRAIN-O-001", "O", "stop_87271007", 480),
             new SimulationTemplate("TRAIN-J-002", "J", "stop_87271003", 720),
             new SimulationTemplate("TRAIN-R-003", "R", "stop_87271005", 120),
             new SimulationTemplate("TRAIN-L-004", "L", "stop_87113001", 600),
