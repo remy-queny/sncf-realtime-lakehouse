@@ -18,7 +18,7 @@ KAFKA_TOPIC = os.getenv(
 )
 
 BRONZE_PATH = PROJECT_ROOT / "data" / "lakehouse" / "bronze" / "trip_updates"
-CHECKPOINT_PATH = PROJECT_ROOT / "data" / "checkpoints" / "bronze_trip_updates"
+CHECKPOINT_PATH = PROJECT_ROOT / "data" / "checkpoints" / "bronze_trip_updates_kafka_v2"
 
 KAFKA_CONNECTOR_PACKAGE = (
     "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3"
@@ -57,7 +57,7 @@ def main() -> None:
             .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS)
             .option("subscribe", KAFKA_TOPIC)
             .option("startingOffsets", "earliest")
-            .option("failOnDataLoss", "false")
+            .option("failOnDataLoss", "true")
             .load()
         )
 
