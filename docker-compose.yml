@@ -9,6 +9,8 @@ services:
       - "9092:9092"
     environment:
       KAFKA_NODE_ID: 1
+      # Stocker les messages dans le volume persistant
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
       KAFKA_PROCESS_ROLES: broker,controller
 
       # Kafka doit être accessible :
