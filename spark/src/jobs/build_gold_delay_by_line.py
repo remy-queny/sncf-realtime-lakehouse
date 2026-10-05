@@ -12,6 +12,7 @@ from pyspark.sql.functions import (
     when,
     window,
 )
+from transforms.gold import aggregate_delay_by_line
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -48,39 +49,7 @@ def main() -> None:
     try:
         silver = spark.read.format("delta").load(str(SILVER_PATH))
 
-        gold = (
-            silver
-            .groupBy(
-                window(col("event_timestamp"), "15 minutes"),
-                col("route_id"),
-                col("line_name"),
-            )
-            .agg(
-                count("*").alias("event_count"),
-                countDistinct(
-                    when(
-                        col("delay_minutes") > 5,
-                        col("trip_id"),
-                    )
-                ).alias("delayed_trip_count"),
-                spark_round(
-                    avg("delay_minutes"), 2
-                ).alias("average_delay_minutes"),
-                spark_max("delay_minutes").alias(
-                    "max_delay_minutes"
-                ),
-            )
-            .select(
-                col("window.start").alias("window_start"),
-                col("window.end").alias("window_end"),
-                "route_id",
-                "line_name",
-                "event_count",
-                "delayed_trip_count",
-                "average_delay_minutes",
-                "max_delay_minutes",
-            )
-        )
+        gold = aggregate_delay_by_line(silver)
 
         print("Gold preview:")
         gold.orderBy("window_start", "route_id").show(

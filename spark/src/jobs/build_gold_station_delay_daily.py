@@ -11,6 +11,7 @@ from pyspark.sql.functions import (
     sum as spark_sum,
     when,
 )
+from transforms.gold import aggregate_station_delay_daily
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -44,22 +45,7 @@ def main() -> None:
     try:
         silver = spark.read.format("delta").load(str(SILVER_PATH))
 
-        gold = (
-            silver
-            .groupBy("event_date", "stop_id", "stop_name")
-            .agg(
-                spark_sum(
-                    when(col("delay_minutes") > 5, 1).otherwise(0)
-                ).alias("delayed_event_count"),
-                spark_round(
-                    avg("delay_minutes"), 2
-                ).alias("average_delay_minutes"),
-                spark_max("delay_minutes").alias(
-                    "max_delay_minutes"
-                ),
-                count("*").alias("event_count"),
-            )
-        )
+        gold = aggregate_station_delay_daily(silver)
 
         print("Gold station preview:")
         gold.orderBy("event_date", "stop_id").show(

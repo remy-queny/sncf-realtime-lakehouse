@@ -19,6 +19,10 @@ public final class TripUpdateEventFactory {
     private TripUpdateEventFactory() {
     }
 
+    static List<SimulationTemplate> simulationTemplates() {
+    return SIMULATION_TEMPLATES;
+}
+
     public static TripUpdateEvent createSimulatedEvent() {
         SimulationTemplate template = SIMULATION_TEMPLATES.get(
                 ThreadLocalRandom.current().nextInt(SIMULATION_TEMPLATES.size())
@@ -44,7 +48,7 @@ public final class TripUpdateEventFactory {
         );
     }
 
-    private record SimulationTemplate(
+    record SimulationTemplate(
             String tripId,
             String routeId,
             String stopId,

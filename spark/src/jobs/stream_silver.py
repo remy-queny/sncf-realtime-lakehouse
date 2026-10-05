@@ -4,7 +4,10 @@ from delta import configure_spark_with_delta_pip
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, current_timestamp, to_date
 
-from transforms.trip_updates import parse_and_validate_trip_updates
+from transforms.trip_updates import (
+    enrich_trip_updates,
+    parse_and_validate_trip_updates,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -105,8 +108,7 @@ def main() -> None:
             .filter(col("validation_error").isNull())
             .withWatermark("event_timestamp", "1 day")
             .dropDuplicatesWithinWatermark(["event_id"])
-            .join(routes, on="route_id", how="left")
-            .join(stops, on="stop_id", how="left")
+            .transform(enrich_trip_updates, routes, stops)
             .withColumn("event_date", to_date(col("event_timestamp")))
             .select(
                 "event_id",

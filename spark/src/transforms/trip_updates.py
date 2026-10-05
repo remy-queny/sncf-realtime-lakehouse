@@ -88,3 +88,14 @@ def parse_and_validate_trip_updates(bronze_dataframe: DataFrame) -> DataFrame:
         )
         .drop("_event", "_corrupt_record")
     )
+
+def enrich_trip_updates(
+    valid_dataframe: DataFrame,
+    routes_dataframe: DataFrame,
+    stops_dataframe: DataFrame,
+) -> DataFrame:
+    return (
+        valid_dataframe
+        .join(routes_dataframe, on="route_id", how="left")
+        .join(stops_dataframe, on="stop_id", how="left")
+    )
