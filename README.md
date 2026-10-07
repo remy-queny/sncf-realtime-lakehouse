@@ -206,8 +206,8 @@ bash scripts/run_pipeline.sh
 
 ### Étape 5 — Consulter les résultats
 
-- [Kafka UI](http://localhost:8080) : inspection du topic et des messages.
-- [Metabase](http://localhost:3000) : configuration initiale et consultation des indicateurs.
+- Kafka UI : inspection du topic et des messages.
+- Metabase : configuration initiale et consultation des indicateurs.
 
 Dans Metabase, ajouter une connexion PostgreSQL avec les paramètres suivants :
 
