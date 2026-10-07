@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  java-tests:
+    name: Tests Java
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: producer-java
+
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Installer Java 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: producer-java/pom.xml
+
+      - name: Exécuter les tests Java
+        run: mvn --batch-mode --no-transfer-progress test
+
+  python-tests:
+    name: Tests Python et Spark
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      PYTHONPATH: ${{ github.workspace }}/spark/src
+      PYSPARK_PYTHON: python
+      SPARK_LOCAL_IP: 127.0.0.1
+      TZ: UTC
+
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Installer Java 17 pour Spark
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Installer Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: spark/requirements.txt
+
+      - name: Installer les dépendances Python
+        run: python -m pip install -r spark/requirements.txt
+
+      - name: Exécuter les tests Python
+        run: python -m pytest spark/tests -v
