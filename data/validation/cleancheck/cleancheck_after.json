@@ -1,0 +1,7 @@
+{
+  "trip_delays": [
+    "{\"event_id\":\"294cd9c7-65c3-4156-9fb4-13039da0b847\",\"event_type\":\"trip_update\",\"source\":\"simulation_java\",\"schema_version\":1,\"trip_id\":\"TRAIN-R-003\",\"route_id\":\"R\",\"line_name\":\"Ligne R (simulation)\",\"stop_id\":\"stop_87271005\",\"stop_name\":\"Arrêt simulé R\",\"scheduled_timestamp\":\"2026-10-08T16:20:31.000Z\",\"estimated_timestamp\":\"2026-10-08T16:22:31.000Z\",\"delay_seconds\":120,\"delay_minutes\":2.0,\"event_timestamp\":\"2026-10-08T16:15:31.000Z\",\"ingested_at\":\"2026-10-08T16:15:42.149Z\",\"event_date\":\"2026-10-08\",\"kafka_topic\":\"sncf.trip_updates.raw\",\"kafka_partition\":0,\"kafka_offset\":0,\"kafka_timestamp\":\"2026-10-08T16:15:31.583Z\"}"
+  ],
+  "rejected_events": [],
+  "postgres": "gold_delay_by_line_15min\n{\"window_start\":\"2026-10-08T16:15:00\",\"window_end\":\"2026-10-08T16:30:00\",\"route_id\":\"R\",\"line_name\":\"Ligne R (simulation)\",\"event_count\":1,\"delayed_trip_count\":0,\"average_delay_minutes\":2,\"max_delay_minutes\":2}\ngold_station_delay_daily\n{\"event_date\":\"2026-10-08\",\"stop_id\":\"stop_87271005\",\"stop_name\":\"Arrêt simulé R\",\"delayed_event_count\":0,\"average_delay_minutes\":2,\"max_delay_minutes\":2,\"event_count\":1}\n"
+}
