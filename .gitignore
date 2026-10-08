@@ -155,7 +155,6 @@ docker-compose.override.yml
 docker-volumes/
 
 /data/source_checks/
-
 /data/lakehouse_real/
 /data/checkpoints_real/
 /data/reference/real/

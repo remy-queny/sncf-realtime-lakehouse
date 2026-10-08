@@ -3,18 +3,27 @@ from datetime import datetime
 from pathlib import Path
 
 import psycopg
+from psycopg import sql
 from delta import configure_spark_with_delta_pip
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import date_format
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-GOLD_ROOT = PROJECT_ROOT / "data" / "lakehouse" / "gold"
+
+LAKEHOUSE_ROOT = Path(
+    os.getenv(
+        "LAKEHOUSE_ROOT",
+        str(PROJECT_ROOT / "data" / "lakehouse"),
+    )
+)
+
+GOLD_ROOT = LAKEHOUSE_ROOT / "gold"
 MAX_ROWS_PER_TABLE = 10_000
 
 
 LINE_UPSERT = """
-INSERT INTO gold_delay_by_line_15min (
+INSERT INTO {table} (
     window_start, window_end, route_id, line_name,
     event_count, delayed_trip_count,
     average_delay_minutes, max_delay_minutes
@@ -31,7 +40,7 @@ ON CONFLICT (window_start, route_id) DO UPDATE SET
 
 
 STATION_UPSERT = """
-INSERT INTO gold_station_delay_daily (
+INSERT INTO {table} (
     event_date, stop_id, stop_name, delayed_event_count,
     average_delay_minutes, max_delay_minutes, event_count
 )
@@ -56,6 +65,28 @@ def collect_small_table(dataframe, table_name):
 
 
 def main() -> None:
+    target_schema = os.getenv("POSTGRES_TARGET_SCHEMA", "public")
+
+    allowed_targets = {
+        "public": PROJECT_ROOT / "data" / "lakehouse",
+        "sncf_real": PROJECT_ROOT / "data" / "lakehouse_real",
+    }
+
+    expected_root = allowed_targets.get(target_schema)
+
+    if expected_root is None:
+        raise ValueError(
+            f"Schéma PostgreSQL non autorisé : {target_schema}"
+        )
+
+    if LAKEHOUSE_ROOT.resolve() != expected_root.resolve():
+        raise ValueError(
+            "Couple lakehouse/schéma PostgreSQL incorrect : "
+            f"{LAKEHOUSE_ROOT} → {target_schema}"
+        )
+
+    print(f"Gold source : {GOLD_ROOT}")
+    print(f"Schéma PostgreSQL cible : {target_schema}")
     builder = (
         SparkSession.builder
         .appName("sncf-publish-gold-postgres")
@@ -131,8 +162,25 @@ def main() -> None:
             password=os.environ["POSTGRES_PASSWORD"],
         ) as connection:
             with connection.cursor() as cursor:
-                cursor.executemany(LINE_UPSERT, line_rows)
-                cursor.executemany(STATION_UPSERT, station_rows)
+                cursor.executemany(
+                    sql.SQL(LINE_UPSERT).format(
+                        table=sql.Identifier(
+                            target_schema,
+                            "gold_delay_by_line_15min",
+                        )
+                    ),
+                    line_rows,
+                )
+
+                cursor.executemany(
+                    sql.SQL(STATION_UPSERT).format(
+                        table=sql.Identifier(
+                            target_schema,
+                            "gold_station_delay_daily",
+                        )
+                    ),
+                    station_rows,
+                )
 
         print(f"Gold line rows published: {len(line_rows)}")
         print(f"Gold station rows published: {len(station_rows)}")
