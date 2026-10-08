@@ -153,3 +153,5 @@ docker-compose.override.yml
 
 # Dossiers de volumes locaux éventuellement ajoutés plus tard
 docker-volumes/
+
+/data/source_checks/
