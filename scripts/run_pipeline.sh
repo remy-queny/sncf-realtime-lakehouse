@@ -51,7 +51,16 @@ print("Connexion PostgreSQL OK")'
 
 for job in \
   stream_bronze.py \
-  stream_silver.py \
+  stream_silver.py
+do
+  echo "=== Exécution : $job ==="
+  "$PYTHON" "spark/src/jobs/$job"
+done
+
+echo "=== Contrôle Silver avant Gold et publication ==="
+"$PYTHON" spark/src/jobs/inspect_silver.py
+
+for job in \
   build_gold_delay_by_line.py \
   build_gold_station_delay_daily.py \
   publish_postgres.py
@@ -59,8 +68,5 @@ do
   echo "=== Exécution : $job ==="
   "$PYTHON" "spark/src/jobs/$job"
 done
-
-echo "=== Contrôle Silver ==="
-"$PYTHON" spark/src/jobs/inspect_silver.py
 
 echo "=== Pipeline terminé ==="
