@@ -227,6 +227,25 @@ Utiliser `postgres`, et non `localhost`, car Metabase et PostgreSQL communiquent
 
 Les visualisations se configurent dans l'interface Metabase. Aucun dashboard préconfiguré n'est provisionné par les scripts fournis.
 
+### Dashboard de simulation
+
+Le dashboard « Suivi des retards ferroviaire (simulation) » présente
+deux graphiques :
+- Retard moyen par ligne.
+- Retard moyen par gare.
+
+Les graphiques consultent les tables PostgreSQL
+`gold_delay_by_line_15min` et `gold_station_delay_daily`.
+
+Les données sont simulées et ne représentent pas la ponctualité réelle
+du réseau SNCF. Les traitements sont exécutés à la demande :
+actualiser le dashboard ne lance pas le pipeline.
+
+[Voir la capture du dashboard](./docs/screenshots/dashboard_simulation.png)
+
+La capture illustre une configuration locale ; le dashboard n'est pas
+automatiquement provisionné lors du lancement depuis un nouveau clone.
+
 ## 4. Tests et fiabilité
 
 ### Tests Java et Python
