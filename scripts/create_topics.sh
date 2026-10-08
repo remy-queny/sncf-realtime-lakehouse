@@ -2,29 +2,32 @@
 
 set -euo pipefail
 
-KAFKA_CONTAINER="sncf-kafka"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$PROJECT_ROOT"
+
 KAFKA_BOOTSTRAP_SERVER="kafka:29092"
 
 create_topic() {
   local topic_name="$1"
 
-  if docker exec "$KAFKA_CONTAINER" \
+  echo "=== Préparation du topic : $topic_name ==="
+
+  docker compose exec -T kafka \
     /opt/kafka/bin/kafka-topics.sh \
     --bootstrap-server "$KAFKA_BOOTSTRAP_SERVER" \
-    --list | grep -qx "$topic_name"; then
+    --create \
+    --if-not-exists \
+    --topic "$topic_name" \
+    --partitions 1 \
+    --replication-factor 1
 
-    echo "Topic already exists: $topic_name"
-  else
-    docker exec "$KAFKA_CONTAINER" \
-      /opt/kafka/bin/kafka-topics.sh \
-      --bootstrap-server "$KAFKA_BOOTSTRAP_SERVER" \
-      --create \
-      --topic "$topic_name" \
-      --partitions 1 \
-      --replication-factor 1
+  docker compose exec -T kafka \
+    /opt/kafka/bin/kafka-topics.sh \
+    --bootstrap-server "$KAFKA_BOOTSTRAP_SERVER" \
+    --describe \
+    --topic "$topic_name"
 
-    echo "Topic created: $topic_name"
-  fi
+  echo "Topic ready: $topic_name"
 }
 
 create_topic "sncf.trip_updates.raw"
