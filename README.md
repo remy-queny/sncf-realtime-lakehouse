@@ -299,6 +299,29 @@ Pour arrêter les services sans supprimer leurs volumes :
 ```bash
 docker compose down
 ```
+### Validation depuis un clone isolé
+
+Un test local a été réalisé dans un clone utilisant le projet Compose
+`sncf-realtime-lakehouse-cleancheck`, avec l'installation originale arrêtée
+pour libérer les ports.
+
+Résultats vérifiés :
+- Création du topic `sncf.trip_updates.raw`.
+- Deuxième exécution du script de création sans modification du TopicId.
+- Initialisation des deux tables PostgreSQL de restitution.
+- Exécution de la démonstration jusqu'à la publication Gold dans PostgreSQL.
+- Un événement comptabilisé dans chaque agrégat, avec un retard de 2 minutes.
+- Relance du pipeline sans nouvel événement : données Silver et PostgreSQL
+  identiques avant et après, vérifiées par comparaison des captures JSON.
+
+Ce test a révélé une dépendance au nom fixe du conteneur `sncf-kafka`.
+Le script `create_topics.sh` utilise désormais le service Compose `kafka`.
+
+Les captures `cleancheck_before.json` et `cleancheck_after.json` ont été
+conservées localement dans le clone.
+
+Ce contrôle valide le scénario exécuté ; il ne constitue pas une garantie
+universelle d'exactly-once ni une validation du dashboard Metabase.
 
 ## 5. Avancement et prochaines étapes
 
