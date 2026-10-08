@@ -241,7 +241,7 @@ Les données sont simulées et ne représentent pas la ponctualité réelle
 du réseau SNCF. Les traitements sont exécutés à la demande :
 actualiser le dashboard ne lance pas le pipeline.
 
-[Voir la capture du dashboard](./docs/screenshots/dashboard_simulation.png)
+![Voir la capture du dashboard](./docs/screenshots/dashboard_simulation.png)
 
 La capture illustre une configuration locale ; le dashboard n'est pas
 automatiquement provisionné lors du lancement depuis un nouveau clone.
