@@ -9,7 +9,12 @@ import org.apache.kafka.common.serialization.StringSerializer;
 
 import java.util.Properties;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class ProducerApplication {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(ProducerApplication.class);
 
     private ProducerApplication() {
     }
@@ -18,11 +23,12 @@ public final class ProducerApplication {
         try {
             run();
         } catch (Exception exception) {
-            System.err.printf(
-                    "status=failed exception_type=%s message=%s%n",
-                    exception.getClass().getSimpleName(),
-                    exception.getMessage()
-            );
+            LOGGER.error(
+                "status=failed exception_type={} message={}",
+                exception.getClass().getSimpleName(),
+                exception.getMessage(),
+                exception
+                );
             System.exit(1);
         }
     }
@@ -87,13 +93,13 @@ public final class ProducerApplication {
 
             RecordMetadata metadata = producer.send(record).get();
 
-            System.out.printf(
-                    "status=delivered event_id=%s topic=%s partition=%d offset=%d%n",
-                    event.eventId(),
-                    metadata.topic(),
-                    metadata.partition(),
-                    metadata.offset()
-            );
+            LOGGER.info(
+                "status=delivered event_id={} topic={} partition={} offset={}",
+                event.eventId(),
+                metadata.topic(),
+                metadata.partition(),
+                metadata.offset()
+                );
         }
     }
 }
