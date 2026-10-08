@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from delta import configure_spark_with_delta_pip
@@ -16,12 +17,16 @@ from transforms.gold import aggregate_station_delay_daily
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-SILVER_PATH = (
-    PROJECT_ROOT / "data" / "lakehouse" / "silver" / "trip_delays"
+LAKEHOUSE_ROOT = Path(
+    os.getenv(
+        "LAKEHOUSE_ROOT",
+        str(PROJECT_ROOT / "data" / "lakehouse"),
+    )
 )
-GOLD_PATH = (
-    PROJECT_ROOT / "data" / "lakehouse" / "gold" / "station_delay_daily"
-)
+
+SILVER_PATH = LAKEHOUSE_ROOT / "silver" / "trip_delays"
+
+GOLD_PATH = LAKEHOUSE_ROOT / "gold" / "station_delay_daily"
 
 
 def main() -> None:

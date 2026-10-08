@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from delta import configure_spark_with_delta_pip
@@ -13,7 +14,15 @@ from pyspark.sql.functions import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SILVER_ROOT = PROJECT_ROOT / "data" / "lakehouse" / "silver"
+
+LAKEHOUSE_ROOT = Path(
+    os.getenv(
+        "LAKEHOUSE_ROOT",
+        str(PROJECT_ROOT / "data" / "lakehouse"),
+    )
+)
+
+SILVER_ROOT = LAKEHOUSE_ROOT / "silver"
 
 def check_duplicate_event_ids(valid: DataFrame) -> None:
     duplicates = (

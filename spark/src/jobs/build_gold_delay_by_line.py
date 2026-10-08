@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from delta import configure_spark_with_delta_pip
@@ -16,16 +17,17 @@ from transforms.gold import aggregate_delay_by_line
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SILVER_PATH = (
-    PROJECT_ROOT / "data" / "lakehouse" / "silver" / "trip_delays"
+
+LAKEHOUSE_ROOT = Path(
+    os.getenv(
+        "LAKEHOUSE_ROOT",
+        str(PROJECT_ROOT / "data" / "lakehouse"),
+    )
 )
-GOLD_PATH = (
-    PROJECT_ROOT
-    / "data"
-    / "lakehouse"
-    / "gold"
-    / "delay_by_line_15min"
-)
+
+SILVER_PATH = LAKEHOUSE_ROOT / "silver" / "trip_delays"
+
+GOLD_PATH = LAKEHOUSE_ROOT / "gold" / "delay_by_line_15min"
 
 
 def main() -> None:

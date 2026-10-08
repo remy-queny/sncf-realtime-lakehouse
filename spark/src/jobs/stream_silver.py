@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from delta import configure_spark_with_delta_pip
@@ -12,25 +13,44 @@ from transforms.trip_updates import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-BRONZE_PATH = PROJECT_ROOT / "data" / "lakehouse" / "bronze" / "trip_updates"
+LAKEHOUSE_ROOT = Path(
+    os.getenv(
+        "LAKEHOUSE_ROOT",
+        str(PROJECT_ROOT / "data" / "lakehouse"),
+    )
+)
+
+CHECKPOINT_ROOT = Path(
+    os.getenv(
+        "CHECKPOINT_ROOT",
+        str(PROJECT_ROOT / "data" / "checkpoints"),
+    )
+)
+
+BRONZE_PATH = LAKEHOUSE_ROOT / "bronze" / "trip_updates"
 
 SILVER_TRIP_DELAYS_PATH = (
-    PROJECT_ROOT / "data" / "lakehouse" / "silver" / "trip_delays"
+    LAKEHOUSE_ROOT / "silver" / "trip_delays"
 )
 
 SILVER_REJECTED_EVENTS_PATH = (
-    PROJECT_ROOT / "data" / "lakehouse" / "silver" / "rejected_events"
+    LAKEHOUSE_ROOT / "silver" / "rejected_events"
 )
 
 SILVER_TRIP_DELAYS_CHECKPOINT = (
-    PROJECT_ROOT / "data" / "checkpoints" / "silver_trip_delays"
+    CHECKPOINT_ROOT / "silver_trip_delays"
 )
 
 SILVER_REJECTED_EVENTS_CHECKPOINT = (
-    PROJECT_ROOT / "data" / "checkpoints" / "silver_rejected_events"
+    CHECKPOINT_ROOT / "silver_rejected_events"
 )
 
-REFERENCE_ROOT = PROJECT_ROOT / "spark" / "resources" / "simulation"
+REFERENCE_ROOT = Path(
+    os.getenv(
+        "GTFS_REFERENCE_ROOT",
+        str(PROJECT_ROOT / "spark" / "resources" / "simulation"),
+    )
+)
 
 
 def create_spark_session() -> SparkSession:
@@ -60,6 +80,9 @@ def main() -> None:
         routes = (
             spark.read
             .option("header", "true")
+            .option("multiLine", "true")
+            .option("escape", '"')
+            .option("mode", "FAILFAST")
             .csv(str(REFERENCE_ROOT / "routes.csv"))
             .select("route_id", "line_name")
         )
@@ -67,6 +90,9 @@ def main() -> None:
         stops = (
             spark.read
             .option("header", "true")
+            .option("multiLine", "true")
+            .option("escape", '"')
+            .option("mode", "FAILFAST")
             .csv(str(REFERENCE_ROOT / "stops.csv"))
             .select("stop_id", "stop_name")
         )
