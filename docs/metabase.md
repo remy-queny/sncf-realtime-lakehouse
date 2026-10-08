@@ -92,7 +92,7 @@ Pour le jeu de quatre événements validé le 8 octobre 2026 :
 Ces valeurs sont un repère de validation, pas des valeurs fixes
 pour les prochaines démonstrations.
 
-Capture : ![Dashboard Metabase].(./screenshots/dashboard_simulation.png)
+Capture : ![Dashboard Metabase](./screenshots/dashboard_simulation.png)
 
 ## Actualisation
 
