@@ -1,10 +1,10 @@
 # SNCF Real-Time Lakehouse
 
-Projet de data engineering local pour analyser des événements de retard ferroviaire avec **Java, Kafka, PySpark et Delta Lake**.
+Projet de data engineering local pour analyser des événements de retard ferroviaire avec Java, Kafka, PySpark et Delta Lake.
 
 Le pipeline suit une architecture Bronze / Silver / Gold et publie les indicateurs dans PostgreSQL pour leur consultation avec Metabase.
 
-> État actuel : pipeline implémenté en mode simulation, publication PostgreSQL disponible, Metabase intégré à Docker Compose et tests Java / Python présents. La connexion aux données SNCF réelles et la CI restent à réaliser. Le dépôt fourni ne contient pas d'export permettant de vérifier la configuration du dashboard Metabase.
+> État actuel : pipeline local fonctionnel en simulation, publication PostgreSQL par upsert, 4 tests Java et 40 cas Python validés, et CI GitHub Actions exécutée avec succès. Les contrôles Silver s'exécutent avant Gold et la publication. Metabase est intégré à Docker Compose ; la configuration du dashboard doit être documentée et revérifiée. La connexion aux données SNCF réelles reste à réaliser.
 
 ## 1. Objectif et architecture
 
@@ -52,6 +52,8 @@ Bronze et Silver utilisent Structured Streaming avec `availableNow=True` : chaqu
 
 ```text
 .
+├── .github/workflows/
+│   └── ci.yml                     # Tests Java et Python/Spark sur GitHub
 ├── docker-compose.yml             # Kafka, Kafka UI, PostgreSQL et Metabase
 ├── .env.example                   # Exemple de configuration locale
 ├── requirements-simulator.txt     # Dépendances du simulateur Python
@@ -59,7 +61,7 @@ Bronze et Silver utilisent Structured Streaming avec `availableNow=True` : chaqu
 │   └── data-contract.md           # Contrat JSON des événements
 ├── infra/postgres/
 │   └── 001_gold_tables.sql        # Tables de restitution
-├── producer-java/                 # Producteur Java et tests JUnit
+├── producer-java/                 # Producteur Java, tests JUnit et configuration SLF4J
 ├── scripts/
 │   ├── create_topics.sh           # Création du topic Kafka
 │   ├── run_demo.sh                # Un événement Java + pipeline complet
@@ -129,7 +131,7 @@ Les compteurs d'événements ne doivent pas être interprétés comme des nombre
 
 - Docker et Docker Compose.
 - JDK 17 et Maven.
-- Python 3.11 pour l'environnement local.
+- Python 3.12, version utilisée pour les validations locales et la CI.
 - Bash, notamment sur macOS ou Linux.
 - Accès Internet à la première installation pour télécharger les images et dépendances.
 
@@ -148,7 +150,7 @@ set -a
 source .env
 set +a
 
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r spark/requirements.txt
 python -m pip install -r requirements-simulator.txt
@@ -187,7 +189,9 @@ Le schéma PostgreSQL est initialisé explicitement : le fichier SQL n'est pas m
 bash scripts/run_demo.sh
 ```
 
-Ce script vérifie le topic, publie un événement simulé avec Java, puis enchaîne Bronze, Silver, les deux agrégations Gold, la publication PostgreSQL et les contrôles Silver.
+Ce script vérifie le topic, publie un événement simulé avec Java, puis lance Bronze, Silver, les contrôles qualité Silver, les deux agrégations Gold et la publication PostgreSQL.
+
+Chaque lancement produit un nouvel événement. Pour vérifier une reprise sans nouvel envoi, utiliser uniquement `bash scripts/run_pipeline.sh`.
 
 Il suppose que les services, le topic, les tables PostgreSQL et l'environnement `.venv` sont déjà prêts.
 
@@ -237,7 +241,24 @@ PYSPARK_PYTHON="$PWD/.venv/bin/python" \
 
 Les suites présentes couvrent notamment la sérialisation JSON, la cohérence des événements Java, la couverture des référentiels de simulation, les transformations et agrégations Python ainsi que des contrôles qualité Silver.
 
-Ces commandes permettent de vérifier les tests localement ; la présence des tests dans le dépôt ne constitue pas une preuve de leur réussite dans tous les environnements. Aucune CI GitHub Actions n'est fournie dans l'état actuel.
+Ces commandes permettent de vérifier les tests localement. Les dernières validations ont réussi pour 4 tests Java et 40 cas Python. Les cas paramétrés sont comptés séparément : 40 cas Python ne signifie pas 40 fonctions de test.
+
+### Intégration continue
+
+La CI est définie dans `.github/workflows/ci.yml`. Elle exécute les tests Java et Python/Spark lors des push et des pull requests, et peut être lancée manuellement.
+
+La première exécution GitHub a réussi pour les deux jobs, avec Java 17 et Python 3.12 sur un runner Linux. Cette CI ne démarre pas Kafka, PostgreSQL ou Metabase et ne valide pas le pipeline complet avec ces services. Elle n'inclut pas encore de lint bloquant.
+
+### Logs du producteur Java
+
+Le producteur utilise `slf4j-api` et `slf4j-simple` en version `1.7.36`. La configuration est dans `producer-java/src/main/resources/simplelogger.properties`.
+
+- Les messages applicatifs sont écrits au niveau `INFO` pour les succès et `ERROR` pour les échecs.
+- Le succès est journalisé après l'accusé de réception Kafka, avec `event_id`, topic, partition et offset.
+- Les erreurs incluent le type d'exception, le message et la trace de l'exception.
+- Les logs applicatifs utilisent un format texte `clé=valeur`, pas un format JSON.
+
+Le chemin d'erreur a été vérifié avec `SIMULATION_MODE=false`, qui reste volontairement non implémenté et échoue avant tout envoi Kafka. Ce contrôle ne valide pas une connexion à l'API réelle.
 
 ### Contrôle des événements invalides
 
@@ -248,7 +269,9 @@ bash scripts/run_pipeline.sh
 
 Le simulateur injecte des cas avec `trip_id` absent, retard non numérique ou timestamp invalide. Silver conserve les rejets dans `silver/rejected_events` avec leur payload et un motif d'erreur.
 
-Le contrôle final `inspect_silver.py` vérifie les doublons d'`event_id`, certains champs obligatoires et la conversion secondes / minutes.
+Avant les calculs Gold et la publication PostgreSQL, `inspect_silver.py` vérifie les doublons d'`event_id`, les champs obligatoires contrôlés et la cohérence entre secondes et minutes. Une anomalie bloquante interrompt le pipeline ; les événements déjà classés dans `rejected_events` restent consultables.
+
+Ces contrôles ne garantissent pas encore la conformité à toutes les exigences du contrat ni la présence de toutes les références d'enrichissement.
 
 ### Reprise après relancement
 
@@ -292,13 +315,15 @@ docker compose down
 - [x] Agrégats Gold par ligne et par arrêt.
 - [x] Publication Gold vers PostgreSQL par upsert.
 - [x] Scripts de démonstration et de traitement.
-- [x] Tests Java et Python.
+- [x] Tests Java et Python : 4 tests Java et 40 cas Python validés.
+- [x] CI GitHub Actions pour les tests Java et Python/Spark.
+- [x] Contrôles qualité Silver bloquants avant Gold et publication.
+- [x] Logging Java avec SLF4J Simple et vérification du log d'erreur.
 - [x] Captures de contrôle de reprise Silver / PostgreSQL.
 
 ### À finaliser pour la V1
 
 - [ ] Documenter et versionner les preuves du dashboard Metabase : captures, filtres et procédure de création.
-- [ ] Ajouter une CI GitHub Actions pour exécuter les tests et vérifier le build.
 - [ ] Documenter les résultats des tests et compléter les scénarios de validation.
 - [ ] Compléter le runbook et la documentation d'architecture.
 - [ ] Connecter une source GTFS-RT réelle tout en conservant le mode simulation.
