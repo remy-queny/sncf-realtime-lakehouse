@@ -731,10 +731,10 @@ universelle d'exactly-once ni une validation du dashboard Metabase.
 - [x] Garde-fou du publisher sur le couple lakehouse / schéma.
 - [x] Validation de 10 événements réels jusqu'à PostgreSQL et Metabase.
 - [x] Documentation du bilan réel dans `docs/real-source.md`.
+- [x] Implémenter le téléchargement HTTP en Java avec délais, erreurs et conservation du mode simulation.
 
 ### À finaliser pour la V1
 
-- [ ] Implémenter le téléchargement HTTP en Java avec délais, erreurs et conservation du mode simulation.
 - [ ] Fournir une commande ou un script reproductible pour le parcours réel, sans dépendre de variables préparées manuellement.
 - [ ] Aligner `docs/data-contract.md` sur le mapping réel et les décisions métier.
 - [ ] Compléter les contrôles Silver sur les champs et règles du contrat retenu.
