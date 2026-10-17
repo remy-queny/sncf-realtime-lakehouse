@@ -6,7 +6,7 @@ Pipeline local de data engineering pour ingérer des observations de retard ferr
 Java → Kafka → PySpark → Delta Lake Bronze / Silver / Gold → PostgreSQL → Tableau Desktop
 ```
 
-> État au 17 octobre 2026 : pipeline de simulation fonctionnel ; parcours réel validé sur 10 observations d’arrêt d’une seule course ; deux dashboards Tableau construits, avec KPI, moyennes pondérées, classement des arrêts et filtre de période testé. L’instantané historique a produit 16 978 événements JSONL, mais seuls 10 ont été validés de bout en bout. Le téléchargement HTTP Java et un script de collecte/préparation sont présents dans le code ; ils ne constituent pas encore une orchestration automatique complète jusqu’à la BI.
+> État au 17 octobre 2026 : pipeline de simulation fonctionnel ; parcours réel validé sur 110 observations d’arrêt issues des instantanés des 8 et 15 octobre 2026. Le nouveau lot de 100 observations couvre 8 courses, 6 lignes et 74 identifiants d’arrêt, dont 39 observations avec un retard strictement supérieur à cinq minutes. Les contrôles PostgreSQL confirment 7 agrégats ligne × fenêtre et 84 agrégats arrêt × jour ; Tableau affiche les données actualisées et le filtre de période a été testé. Le traitement réel dispose de `scripts/run_real_pipeline.sh`, sans collecte ni publication Kafka. La collecte, l’envoi et l’actualisation Tableau restent des étapes séparées, exécutées à la demande.
 
 ## Aperçu des dashboards Tableau
 
@@ -14,7 +14,7 @@ Java → Kafka → PySpark → Delta Lake Bronze / Silver / Gold → PostgreSQL 
 
 ![Dashboard Tableau de synthèse : observations analysées, retard moyen et maximal, graphiques par ligne et par arrêt](docs/screenshots/tableau-real-overview.png)
 
-- Trois KPI : 10 observations, retard moyen pondéré de 1,5 minute, retard maximal de 5 minutes.
+- Trois KPI affichés sur les deux lots réunis : 110 observations, retard moyen pondéré de 7,68 minutes et retard maximal de 45 minutes.
 - Retard moyen par ligne et par arrêt, avec valeurs affichées.
 - Connexion directe à PostgreSQL, sans export CSV intermédiaire.
 
@@ -24,11 +24,11 @@ Java → Kafka → PySpark → Delta Lake Bronze / Silver / Gold → PostgreSQL 
 
 - Tableau comparatif par arrêt : volume d’observations, retard moyen pondéré, part des observations > 5 minutes et retard maximal.
 - Tri décroissant du retard moyen et filtre « Période d’observation » sur la date d’observation.
-- Filtre testé : exclusion du 8 octobre → tableau vide ; réintégration de la date → retour des dix arrêts, sur l’échantillon actuel.
+- Filtre « Période d’observation » testé sur les dates disponibles : 8 et 15 octobre 2026. Les contrôles SQL de référence donnent respectivement 10 et 100 observations ; la vue doit être comparée au même périmètre.
 
-Les images sont des captures statiques des dashboards locaux, recadrées depuis les captures de travail. Elles s’affichent dans le README ; les filtres ne sont manipulables que dans Tableau. La capture de synthèse conserve un défilement dans la vue des arrêts : les dix arrêts sont détaillés dans le second dashboard. Des exports PNG natifs pourront remplacer ces images sans changer leurs chemins.
+Les images référencées sont des captures statiques : les filtres ne sont manipulables que dans Tableau. Les captures de travail ont montré les nouvelles données ; les fichiers PNG aux chemins ci-dessus doivent être actualisés avec la version à 110 observations et leur rendu vérifié sur GitHub. Prévoir des captures sans panneaux d’édition, avec la colonne de retard maximal entièrement visible. La présence des liens dans ce README ne prouve pas que les nouveaux exports sont déjà versionnés.
 
-> Périmètre : instantané du 8 octobre 2026, dix observations d’arrêt d’une seule course. Ce résultat démontre le fonctionnement du pipeline et de la BI, pas la ponctualité globale du réseau. Le titre « Real-Time » décrit l’architecture événementielle ; les exécutions actuellement validées sont à la demande, pas un service permanent.
+> Périmètre : 110 observations d’arrêt sélectionnées dans deux instantanés, datés des 8 et 15 octobre 2026. Le lot du 15 octobre a été rejoué le 17 octobre : il ne constitue pas une collecte en direct de ce jour-là. Ce résultat démontre le fonctionnement du pipeline et de la BI, pas la ponctualité globale du réseau. Le titre « Real-Time » décrit l’architecture événementielle ; les exécutions validées sont à la demande, pas un service permanent.
 
 La restitution principale est désormais Tableau Desktop Free Edition sur Mac, hors Docker. Metabase reste une validation historique et son service est encore présent dans le Docker Compose fourni ; son retrait n’est pas présenté comme réalisé.
 
@@ -51,9 +51,9 @@ Indicateurs implémentés :
 Deux parcours coexistent :
 
 - Simulation : événements générés et référentiels CSV simulés, pour une démonstration contrôlée.
-- Réel : événements issus d'un instantané SNCF GTFS-RT et enrichis avec un référentiel GTFS statique réel.
+- Réel : observations issues d’instantanés SNCF GTFS-RT, enrichies avec les références GTFS statiques du lot correspondant.
 
-Le parcours réel validé porte sur 10 observations d'arrêt d'une seule course. Il ne constitue pas une mesure représentative de la ponctualité globale du réseau ou de la ligne.
+Le parcours réel validé cumule 10 observations historiques du 8 octobre et 100 observations du 15 octobre. Le second lot couvre plusieurs courses, lignes et retards significatifs. Cet échantillon sélectionné ne constitue pas une mesure représentative de la ponctualité globale du réseau ou des lignes.
 
 ### Flux de données
 
@@ -73,11 +73,10 @@ Producteur Java / simulateur Python
 Parcours réel actuellement validé :
 
 ```text
-Instantané GTFS-RT et référentiel GTFS statique
-    (téléchargement manuel lors du test historique)
+Instantanés GTFS-RT et références GTFS statiques du lot
     → Décodage et mapping Java
-    → Export JSONL de 16 978 événements
-    → Publication Java de 10 événements sélectionnés
+    → Exports JSONL canoniques
+    → Publication Java contrôlée : 10 observations historiques + 100 nouvelles
     → Kafka : sncf.trip_updates.real.raw
     → Bronze Delta dédiée
     → Silver Delta : validation, déduplication, références GTFS réelles
@@ -90,7 +89,7 @@ Les instantanés Protobuf sont conservés localement séparément de Bronze. Bro
 
 Bronze et Silver utilisent Structured Streaming avec `availableNow=True` : chaque lancement traite les données disponibles puis se termine. Gold est recalculé en batch, puis publié dans PostgreSQL. Aucun des dashboards n'est actuellement alimenté par des jobs permanents.
 
-Une collecte HTTP séparée est désormais implémentée : `GtfsRealtimeHttpDownloader` télécharge et valide un instantané ; `scripts/collect_real_snapshot.sh` prépare les références et l’export JSONL. Ce script ne publie pas dans Kafka et ne lance ni Spark ni Tableau.
+Une collecte HTTP séparée est implémentée : `GtfsRealtimeHttpDownloader` télécharge et valide un instantané ; `scripts/collect_real_snapshot.sh` prépare les références et l’export JSONL. Ce script ne publie pas dans Kafka et ne lance ni Spark ni Tableau. Après un envoi contrôlé via `RealJsonlProducer`, `scripts/run_real_pipeline.sh` enchaîne le traitement réel jusqu’à PostgreSQL. L’actualisation de Tableau est déclenchée séparément.
 
 Voir [la validation historique de la source SNCF réelle](docs/real-source.md) pour le périmètre et les résultats du premier test. Certaines pages historiques mentionnent encore Metabase ; la présente version du README décrit l’avancement Tableau.
 
@@ -126,6 +125,7 @@ Voir [la validation historique de la source SNCF réelle](docs/real-source.md) p
 │   ├── prepare_real_references.py
 │   ├── run_demo.sh                   # Démonstration de simulation
 │   ├── run_pipeline.sh               # Parcours standard de simulation
+│   ├── run_real_pipeline.sh          # Traitement réel jusqu’à PostgreSQL, sans nouvel envoi
 │   ├── simulate_trip_updates.py
 │   └── snapshot_resume_state.py      # Captures du parcours de simulation
 ├── spark/
@@ -187,7 +187,7 @@ Les mêmes structures analytiques sont utilisées dans deux périmètres :
 | Topic | `sncf.trip_updates.raw` | `sncf.trip_updates.real.raw` |
 | Racine Delta | `data/lakehouse` | `data/lakehouse_real` |
 | Checkpoints | `data/checkpoints` | `data/checkpoints_real` |
-| Références | `spark/resources/simulation` | `data/reference/real/sncf` |
+| Références | `spark/resources/simulation` | `data/reference/real/<lot>` ; historique : `data/reference/real/sncf` |
 | Schéma PostgreSQL | `public` | `sncf_real` |
 
 Tables PostgreSQL dans chacun des schémas :
@@ -360,13 +360,30 @@ Sa procédure reste dans [la documentation historique Metabase](docs/metabase.md
 
 ### État validé et prérequis
 
-Le parcours réel historique a été validé avec un téléchargement manuel et un rejeu limité à 10 événements ; ces agrégats ont ensuite été consultés et contrôlés dans les deux dashboards Tableau.
+Le premier test réel portait sur 10 observations du 8 octobre. Le 17 octobre 2026, un rejeu contrôlé de 100 observations de l’instantané du 15 octobre a porté le total à 110. La publication PostgreSQL, les volumes SQL, l’actualisation Tableau et le fonctionnement du filtre de période ont été vérifiés. Les résultats du premier test restent conservés ci-dessous comme historique.
 
-Le téléchargement HTTP existe désormais dans une classe Java dédiée et un script de collecte/préparation. Il n’existe pas encore de commande unique validée qui enchaîne collecte, publication Kafka, Spark, PostgreSQL et actualisation Tableau. Les commandes détaillées ci-dessous conservent le parcours manuel reproductible ; l’alternative HTTP est décrite après ses résultats historiques.
+Le téléchargement HTTP existe dans une classe Java dédiée et un script de collecte/préparation. Le traitement après publication Kafka est regroupé dans `scripts/run_real_pipeline.sh`. Il n’existe pas encore de commande unique validée qui enchaîne collecte, publication Kafka, Spark, PostgreSQL et actualisation Tableau. Les étapes détaillées ci-dessous conservent la procédure explicite ; l’alternative HTTP et les résultats des deux lots sont également documentés.
 
 Cette procédure suppose que l'installation de simulation a déjà initialisé l'infrastructure, les dépendances et les tables `public`. Le script SQL réel copie leur structure.
 
 Exécuter les commandes depuis la racine du dépôt original. Ne pas modifier le topic par défaut de `.env` et ne pas lancer `run_demo.sh` ou `run_pipeline.sh` pour orchestrer le parcours réel.
+
+### Commande de traitement réel validée
+
+Après préparation des références et publication contrôlée des événements dans Kafka, exécuter depuis la racine du dépôt :
+
+```bash
+# Exemple du lot utilisé pour la validation du 17 octobre.
+# Ce dossier doit déjà contenir les références préparées pour ce lot.
+bash scripts/run_real_pipeline.sh \
+  data/reference/real/collection-eYyLYD
+```
+
+Pour une nouvelle collecte, remplacer l’argument par le dossier de références affiché lors de sa préparation. Ne pas créer un dossier vide pour reproduire le nom de cet exemple.
+
+Le script enchaîne Bronze, Silver, les contrôles Silver, les deux agrégations Gold et la publication dans `sncf_real`, en utilisant `data/lakehouse_real` et les checkpoints réels existants. Il ne télécharge aucun flux, ne publie aucun message Kafka et n’actualise pas Tableau. Ne pas supprimer les checkpoints pour une relance.
+
+Cette commande remplace l’exécution manuelle des étapes 6 et 7 ci-dessous ; ne pas effectuer les deux procédures pour un même contrôle. Elle a été exécutée avec succès dans l’installation locale, sans constituer une preuve de reprise réelle par comparaison avant/après ni une validation depuis un nouveau clone.
 
 ### Étape 1 — Télécharger les sources
 
@@ -508,7 +525,7 @@ La validation historique a utilisé les racines dédiées ci-dessous. Ces comman
 
 Les variables restent limitées au sous-shell. Ne pas modifier le topic consommé en réutilisant un checkpoint de simulation.
 
-Un nouveau référentiel ne réenrichit pas automatiquement les événements déjà écrits dans Silver. Les traitements réels restent cumulatifs : sur une installation déjà utilisée, une nouvelle publication peut augmenter les effectifs au-delà de 10.
+Un nouveau référentiel ne réenrichit pas automatiquement les événements déjà écrits dans Silver. Les traitements réels restent cumulatifs : le total validé est maintenant de 110 observations, et les prochaines publications peuvent l’augmenter.
 
 ### Étape 7 — Publier Gold dans sncf_real
 
@@ -557,6 +574,51 @@ FROM sncf_real.gold_station_delay_daily;
 SQL
 ```
 
+### Validation complémentaire exécutée le 17 octobre 2026
+
+#### Profil du nouveau lot avant publication
+
+Les 100 premières observations de `data/source_checks/collection-eYyLYD/trip_updates.canonical.jsonl` ont été examinées avant leur envoi. Le dossier de références associé est `data/reference/real/collection-eYyLYD`. Ces noms désignent des fichiers locaux de cette exécution, non fournis par un nouveau clone.
+
+| Contrôle de l’échantillon | Résultat |
+|---|---:|
+| Date d’observation | 2026-10-15 |
+| Observations sélectionnées | 100 |
+| Identifiants `event_id` distincts | 100 |
+| Courses `trip_id` distinctes | 8 |
+| Lignes `route_id` distinctes | 6 |
+| Arrêts `stop_id` distincts | 74 |
+| Observations avec retard strictement supérieur à 5 minutes | 39 |
+| Observations avec avance | 0 |
+
+La source de ces 100 observations est exclusivement `sncf_gtfs_rt`. Les 39 observations en retard significatif ne sont pas un décompte de 39 trains distincts.
+
+#### Publication et traitement observés
+
+- Une publication de 100 événements dans `sncf.trip_updates.real.raw`.
+- Accusés de réception sur la partition `0`, offsets `10` à `109`.
+- Bilan du producteur : `status=completed ... delivered_count=100`, puis `BUILD SUCCESS`.
+- Exécution réussie de `run_real_pipeline.sh` avec les références du lot.
+- Publication de 7 agrégats par ligne/fenêtre et de 84 agrégats par arrêt/jour dans `sncf_real`.
+
+Ne pas republier ce JSONL pour retrouver ces nombres. Les offsets ci-dessus sont ceux de cette exécution, pas des valeurs attendues pour toute installation. Les compteurs détaillés de rejets et de doublons Silver du nouveau lot restent à archiver ; aucun résultat nul n’est déduit du seul succès de la publication.
+
+#### Résultats PostgreSQL vérifiés
+
+| Date d’observation | Agrégats arrêt × jour | Observations | Observations > 5 min | Part > 5 min |
+|---|---:|---:|---:|---:|
+| 2026-10-08 | 10 | 10 | 0 | 0,00 % |
+| 2026-10-15 | 74 | 100 | 39 | 39,00 % |
+| Total des deux lots | 84 | 110 | 39 | 35,45 % |
+
+La table `sncf_real.gold_delay_by_line_15min` contient 7 agrégats et représente également 110 observations. Les deux tables décrivent les mêmes observations à des granularités différentes : leurs volumes ne doivent pas être additionnés. Les 84 agrégats arrêt/jour ne signifient pas 84 arrêts distincts sur toute la période ; les 7 agrégats ligne/fenêtre ne signifient pas 7 lignes distinctes.
+
+#### Résultat Tableau observé
+
+Après actualisation manuelle, la synthèse affiche 110 observations, un retard moyen pondéré de 7,68 minutes et un retard maximal de 45 minutes. Ces deux valeurs de retard sont celles affichées dans Tableau ; les requêtes SQL exécutées dans cette validation ont contrôlé les volumes et les observations au-delà du seuil.
+
+Les descriptions mentionnent les instantanés des 8 et 15 octobre ; les moyennes sont affichées avec deux décimales et les pourcentages par arrêt avec une décimale. Le fonctionnement du filtre de période a été confirmé manuellement. Les captures de travail montrent les nouvelles valeurs ; leur export propre et leur archivage dans le dépôt restent à finaliser.
+
 ### Résultats du test historique du 8 octobre 2026
 
 | Contrôle | Résultat |
@@ -602,7 +664,7 @@ bash scripts/collect_real_snapshot.sh "$GTFS_ARCHIVE"
 
 Il prépare les références et leur manifeste, télécharge le GTFS-RT via Java, puis génère un export JSONL non vide. Il affiche les chemins de l’instantané, de l’export et des références. Chaque exécution crée un nouveau dossier de collecte.
 
-Ce script s’arrête avant Kafka et Spark. Pour utiliser ses sorties dans le parcours réel, reprendre explicitement les chemins affichés comme `REALTIME_FILE`, `JSONL_OUTPUT` et `REFERENCE_DIR`, puis suivre les étapes de publication et de traitement. Ne pas relancer la préparation dans un dossier déjà créé. L’existence du code ne constitue pas une nouvelle preuve d’exécution de bout en bout sur l’intégralité des événements.
+Ce script s’arrête avant Kafka et Spark. Pour utiliser ses sorties, reprendre les chemins affichés comme `REALTIME_FILE`, `JSONL_OUTPUT` et `REFERENCE_DIR`, contrôler un échantillon puis effectuer une seule publication Kafka. Lancer ensuite `bash scripts/run_real_pipeline.sh "$REFERENCE_DIR"`. Ne pas relancer la préparation dans un dossier déjà créé. La validation complémentaire porte sur 100 observations sélectionnées, pas sur la totalité d’un export ni sur une collecte permanente.
 
 ### Restitution réelle dans Tableau
 
@@ -658,17 +720,59 @@ IF SUM([event_count]) > 0 THEN
 END
 ```
 
-Formater le ratio en pourcentage, sans multiplier la formule par 100. Ne pas sommer les moyennes. Les moyennes Gold étant arrondies à deux décimales, leur recomposition peut être légèrement approximative.
+Formater le ratio en pourcentage, sans multiplier la formule par 100. Les vues validées affichent les effectifs sans décimales, les retards moyens avec deux décimales et les pourcentages avec une décimale. Ne pas sommer les moyennes. Les moyennes Gold étant arrondies à deux décimales, leur recomposition peut être légèrement approximative.
 
 #### Filtre de période
 
-Le dashboard d’analyse des arrêts utilise une plage de dates sur `event_date`. Le test manuel a confirmé la disparition de l’échantillon lorsque le 8 octobre 2026 est exclu, puis son retour lorsque cette date est réintégrée. Ce filtre ne doit pas être présenté comme un filtre global du dashboard de synthèse.
+Le dashboard d’analyse des arrêts utilise une plage de dates sur `event_date`. Son fonctionnement a été confirmé manuellement après ajout du lot du 15 octobre. Le filtre reste propre à l’analyse des arrêts et ne doit pas être présenté comme un filtre global du dashboard de synthèse.
 
-Une seule date et une seule fenêtre sont actuellement démontrées : aucune tendance temporelle ou comparaison multi-jours n’est annoncée.
+Références pour les contrôles sur une date isolée :
+
+| Période sélectionnée | Observations SQL | Observations > 5 min | Part > 5 min |
+|---|---:|---:|---:|
+| 08/10/2026 uniquement | 10 | 0 | 0 % |
+| 15/10/2026 uniquement | 100 | 39 | 39 % |
+
+Avec les deux lots présents, exclure le 8 octobre ne suffit plus à obtenir une vue vide : les données du 15 octobre restent affichables. Une période excluant les deux dates doit ne montrer aucune observation. Pour la présentation d’ensemble, utiliser une plage du 8 au 15 octobre et préciser qu’elle contient seulement deux instantanés, sans couverture continue entre les deux dates.
+
+Deux dates sont maintenant disponibles, mais aucune courbe temporelle n’a été construite ou validée. Les deux échantillons sélectionnés ne suffisent pas à démontrer une tendance représentative.
 
 #### Contrôles SQL
 
-Contrôle du bandeau de synthèse :
+Pour ouvrir une console PostgreSQL depuis le terminal, sans installer `psql` sur le Mac :
+
+```bash
+docker exec -it sncf-postgres sh -c 'exec psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-${POSTGRES_USER:-postgres}}"'
+```
+
+Coller les requêtes SQL à l’invite `psql`, et non directement à l’invite du shell. Quitter la console avec `\q`. Cette commande utilise le nom de conteneur `sncf-postgres` constaté dans l’installation locale.
+
+Contrôles exécutés sur les données publiées :
+
+```sql
+SELECT
+    event_date,
+    COUNT(*) AS station_day_rows,
+    SUM(event_count) AS observations,
+    SUM(delayed_event_count) AS observations_over_5min,
+    ROUND(
+        100.0 * SUM(delayed_event_count)
+        / NULLIF(SUM(event_count), 0),
+        2
+    ) AS observations_over_5min_pct
+FROM sncf_real.gold_station_delay_daily
+GROUP BY event_date
+ORDER BY event_date;
+
+SELECT
+    COUNT(*) AS line_window_rows,
+    SUM(event_count) AS observations
+FROM sncf_real.gold_delay_by_line_15min;
+```
+
+Résultats obtenus dans l’installation validée : `(2026-10-08, 10, 10, 0, 0.00)` et `(2026-10-15, 74, 100, 39, 39.00)` pour la première requête ; `(7, 110)` pour la seconde. De nouvelles publications peuvent modifier ces résultats.
+
+Contrôle complémentaire du bandeau de synthèse, à exécuter pour vérifier aussi les retards moyen et maximal côté SQL :
 
 ```sql
 SELECT
@@ -711,7 +815,7 @@ Le classeur local porte le nom `sncf_real_dashboard`. Un fichier `.twb` en conne
 
 Pour consulter de nouveau les vues : démarrer PostgreSQL, ouvrir le classeur, renseigner la connexion si demandé et actualiser les données. Consulter [le guide Tableau](bi/tableau/README.md) pour la reconstruction et le dépannage.
 
-Actualiser Tableau ne télécharge pas les sources SNCF et ne déclenche pas le pipeline. Le test de lecture des données existantes et celui du filtre sont réalisés ; un nouveau test documenté « publication PostgreSQL → actualisation Tableau → nouvelles valeurs » reste à conserver pour la clôture V1.
+Actualiser Tableau ne télécharge pas les sources SNCF et ne déclenche pas le pipeline. Le 17 octobre, le scénario « nouvelle publication Kafka → traitement → PostgreSQL → actualisation Tableau → nouvelles valeurs » a été exécuté : le KPI est passé de 10 à 110 observations. Les contrôles SQL, les captures de travail et le test manuel du filtre documentent cette validation ; les exports propres et leur archivage dans le dépôt restent à finaliser. Une connexion en direct n’implique pas une actualisation visuelle automatique en continu.
 
 ## 5. Tests et fiabilité
 
@@ -848,7 +952,11 @@ universelle d'exactly-once ni une validation des dashboards Tableau. La BI a ét
 - [x] Deux sources Tableau séparées pour les agrégats réels par ligne et par arrêt.
 - [x] Dashboard de synthèse : trois KPI, retard moyen par ligne et par arrêt.
 - [x] Dashboard d’analyse : quatre indicateurs par arrêt, tri et filtre de période.
-- [x] Contrôle des valeurs de l’échantillon et test du filtre par inclusion/exclusion de sa date.
+- [x] Contrôle SQL des deux lots réels : 110 observations, 7 agrégats ligne/fenêtre et 84 agrégats arrêt/jour.
+- [x] Échantillon complémentaire diversifié : 100 observations, 8 courses, 6 lignes et 39 observations > 5 minutes.
+- [x] Actualisation manuelle Tableau après nouvelle publication PostgreSQL : passage de 10 à 110 observations.
+- [x] Descriptions et formats des dashboards mis à jour ; filtre de période testé sur les dates disponibles.
+- [x] Script `run_real_pipeline.sh` exécuté jusqu’à PostgreSQL avec les références du lot, sans nouvel envoi Kafka.
 - [x] Captures des deux dashboards disponibles pour présentation dans le README.
 - [x] Documentation du bilan réel dans `docs/real-source.md`.
 - [x] Téléchargement HTTP Java implémenté dans un composant dédié, avec délais, contrôles et tests présents dans le code.
@@ -856,17 +964,16 @@ universelle d'exactly-once ni une validation des dashboards Tableau. La BI a ét
 
 ### À finaliser pour la V1
 
-- [ ] Fournir une commande ou un script reproductible pour le parcours réel, sans dépendre de variables préparées manuellement.
+- [ ] Vérifier le script réel et ses prérequis dans un clone isolé ; compléter le runbook sans annoncer une orchestration collecte → BI automatique.
 - [ ] Aligner `docs/data-contract.md` sur le mapping réel et les décisions métier.
-- [ ] Compléter les contrôles Silver sur les champs et règles du contrat retenu.
+- [ ] Compléter les contrôles Silver sur les champs et règles du contrat retenu ; archiver les compteurs détaillés du nouveau lot.
 - [ ] Tester la reprise du parcours réel sans nouvelle publication et conserver une preuve distincte.
-- [ ] Valider un échantillon réel plus diversifié : plusieurs courses, lignes et retards significatifs.
 - [ ] Ajouter des analyses temporelles après validation de plusieurs fenêtres et de davantage de données.
 - [ ] Revalider l’exécution de la suite de tests courante et archiver les résultats du commit retenu.
 - [ ] Vérifier le classeur Tableau avant versionnement et tester sa réouverture depuis une configuration reproductible.
-- [ ] Conserver une preuve d’actualisation Tableau après nouvelle publication PostgreSQL.
+- [ ] Archiver dans le dépôt les preuves de l’actualisation Tableau déjà exécutée : contrôles SQL, captures propres et description du scénario.
 - [ ] Retirer les références Metabase devenues inutiles dans Compose et les documents, sans supprimer les volumes métier.
-- [ ] Ajouter au dépôt les deux images du README et le guide Tableau ; vérifier leur rendu sur GitHub.
+- [ ] Actualiser les deux images du README avec les données à 110 observations, vérifier le guide Tableau et leur rendu sur GitHub.
 - [ ] Compléter si nécessaire les exports PNG natifs et la vidéo de démonstration.
 - [ ] Compléter le runbook pour les sources, références et publications réelles.
 - [ ] Compléter la documentation d'architecture, des timestamps et de la sémantique des indicateurs.
@@ -879,7 +986,7 @@ La V1 n'est pas déclarée terminée uniquement parce que l'échantillon réel f
 
 - Le producteur simulé publie un événement par exécution ; son flag `SIMULATION_MODE=false` n'active pas le parcours réel.
 - Le parcours réel reste une suite d’étapes à la demande. La collecte HTTP Java existe, mais le script de préparation n’enchaîne pas la publication Kafka, Spark et PostgreSQL.
-- Seuls 10 événements réels ont été validés de bout en bout, contre 16 978 exportés.
+- Le périmètre réel validé est limité à 110 observations sélectionnées dans deux instantanés. Les 16 978 événements exportés du premier instantané n’ont pas été validés intégralement de bout en bout ; les 100 nouvelles observations viennent d’un autre lot.
 - Les courses ajoutées ou annulées et les arrêts sautés sont exclus du premier périmètre de retard, avec des compteurs d'exclusion.
 - Les horaires théoriques réels sont reconstitués depuis `time - delay` ; les fenêtres utilisent la publication du flux.
 - Plusieurs instantanés peuvent produire plusieurs observations du même passage : les agrégats actuels ne constituent pas un calcul de ponctualité finale ou de dernière prévision par passage.
@@ -892,7 +999,7 @@ La V1 n'est pas déclarée terminée uniquement parce que l'échantillon réel f
 - Les dashboards Tableau ont été configurés manuellement. Leur ouverture dépend du classeur et de la base locale ; la reconstruction dans un nouveau clone reste à contrôler.
 - La connexion « En direct » n’est pas une collecte ni une actualisation visuelle continue.
 - L’échantillon ne permet pas encore une analyse temporelle ou une comparaison représentative des lignes.
-- Le taux au-delà de cinq minutes est nul sur cet échantillon ; cela ne signifie pas absence de retard.
+- Le taux d’observations > 5 minutes dépend du périmètre : 0 % le 8 octobre, 39 % le 15 octobre et 35,45 % sur les deux lots. Ce n’est pas un taux de trains uniques en retard. Un taux nul au-delà du seuil ne signifie pas absence de tout retard.
 - Le compte BI en lecture seule et la restriction du port PostgreSQL à l’interface locale ne sont pas déclarés réalisés.
 - Les alertes de service et la DLQ Kafka ne sont pas implémentées.
 - Un seul broker Kafka est utilisé : le projet local n'est pas une infrastructure de production haute disponibilité.
