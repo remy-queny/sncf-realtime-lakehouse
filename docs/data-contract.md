@@ -2,32 +2,47 @@
 
 ## Objectif
 
-Ce contrat décrit le payload JSON publié dans Kafka par le producteur
-Java en mode simulation. Le simulateur Python complémentaire utilise
-également ce format.
+Ce contrat décrit le payload JSON canonique publié dans Kafka pour les observations de retard ferroviaire du projet, en simulation et dans le parcours SNCF réel.
 
-Bronze conserve le payload original. Silver le transforme en colonnes
-typées et enrichies. Gold contient des agrégats, pas des événements au
-même format JSON.
+Il est utilisé par :
+
+- Le producteur Java de simulation : `ProducerApplication`.
+- Le simulateur Python complémentaire.
+- Le parcours réel : normalisation GTFS-RT par `GtfsRealtimeJsonExporter`, puis publication d’un échantillon JSONL par `RealJsonlProducer`.
+
+Le téléchargement HTTP, la normalisation, la publication Kafka et les traitements Spark sont des étapes distinctes. Le flag `SIMULATION_MODE=false` du producteur initial ne remplace pas les classes dédiées au parcours réel.
+
+Bronze conserve le payload JSON original et les métadonnées Kafka. Silver produit des colonnes typées et enrichies. Gold contient des agrégats : il ne reprend pas le format événementiel de ce contrat.
+
+Ce document distingue les règles attendues d’un événement conforme, les choix du mapping réel et les contrôles effectivement présents dans Silver. Une règle décrite ici ne constitue pas, à elle seule, un contrôle implémenté.
 
 ## Topic Kafka
 
-```text
-sncf.trip_updates.raw
-```
+| Parcours | Topic | Source du payload | Racine Delta | Schéma PostgreSQL |
+|---|---|---|---|---|
+| Simulation Java | `sncf.trip_updates.raw` | `simulation_java` | `data/lakehouse` | `public` |
+| Simulation Python | `sncf.trip_updates.raw` | `simulation` | `data/lakehouse` | `public` |
+| Réel SNCF | `sncf.trip_updates.real.raw` | `sncf_gtfs_rt` | `data/lakehouse_real` | `sncf_real` |
+
+Les topics, les racines Delta et les checkpoints des deux parcours doivent rester séparés. Le topic réel ne doit pas recevoir les événements simulés.
+
+Le périmètre de ce contrat est `trip_update`. Les alertes de service ne sont pas couvertes par ce schéma. La DLQ Kafka n’est pas présentée comme implémentée : les rejets actuellement décrits plus bas sont des tables Delta Silver.
 
 ## Clé Kafka
 
-La clé Kafka est :
+La clé Kafka d’un événement conforme est :
 
 ```text
 trip_id
 ```
 
-Tous les événements d'une même course utilisent la même clé Kafka afin
-de conserver leur ordre dans la partition correspondante.
+Elle sert au regroupement des observations d’une même course dans le partitionnement Kafka. Elle ne doit pas être confondue avec `event_id`, qui identifie une observation et sert à la déduplication.
 
-## Exemple d'événement
+L’ordre des messages dans une partition ne doit pas être interprété comme un tri des heures de passage des trains ni comme un ordre global entre toutes les partitions. Les événements volontairement invalides du simulateur relèvent de tests négatifs, pas du contrat nominal.
+
+## Exemple d’événement
+
+### Simulation Java
 
 ```json
 {
@@ -46,90 +61,167 @@ de conserver leur ordre dans la partition correspondante.
 }
 ```
 
-Cet exemple est fictif et correspond aux identifiants du modèle H actuel.
-À chaque lancement, le producteur génère un nouvel UUID et des timestamps
-actuels. Les noms de lignes et d'arrêts sont ajoutés dans Silver à partir
-des référentiels de simulation.
+Cet exemple est fictif et correspond aux identifiants du modèle H Java. Le producteur simulé génère un nouvel UUID et de nouveaux timestamps à chaque exécution. Les noms de lignes et d’arrêts sont ajoutés dans Silver à partir des références de simulation.
+
+### Illustration du format réel avec une avance
+
+```json
+{
+  "event_id": "b7ad81c5-3974-3f8d-9873-5dcf2fc173ef",
+  "event_type": "trip_update",
+  "source": "sncf_gtfs_rt",
+  "schema_version": 1,
+  "trip_id": "TRIP-EXEMPLE",
+  "route_id": "ROUTE-EXEMPLE",
+  "stop_id": "STOP-EXEMPLE",
+  "scheduled_timestamp": "2026-10-15T14:30:00Z",
+  "estimated_timestamp": "2026-10-15T14:28:00Z",
+  "delay_seconds": -120,
+  "event_timestamp": "2026-10-15T14:25:00Z",
+  "ingested_at": "2026-10-15T14:25:02Z"
+}
+```
+
+Cet exemple est entièrement illustratif : les identifiants et l’UUID ne proviennent pas d’une observation SNCF et ne sont pas le résultat du calcul du mapper. Il montre uniquement qu’une valeur négative représente une avance et reste cohérente avec les deux horaires. Il ne doit pas être publié dans le topic réel comme une donnée source.
 
 ## Description des champs
 
-| Champ | Type | Obligatoire | Description |
-|---|---|---:|---|
-| `event_id` | string UUID | Oui | Identifiant unique de l'événement, utilisé pour la déduplication. |
-| `event_type` | string | Oui | Type de l'événement. Valeur attendue : `trip_update`. |
-| `source` | string | Oui | `simulation_java` pour le producteur Java actuel ; source réelle à définir lors de son intégration. |
-| `schema_version` | integer | Oui | Version du format de données. La première version vaut `1`. |
-| `trip_id` | string | Oui | Identifiant stable du train ou de la course. Il sert de clé Kafka. |
-| `route_id` | string | Oui | Identifiant de la ligne, par exemple `H`, `J`, `L`, `O` ou `R`. |
-| `stop_id` | string | Oui | Identifiant de l'arrêt ou de la gare. |
-| `scheduled_timestamp` | timestamp ISO-8601 UTC ou `null` | Oui | Heure théorique de passage de la course. |
-| `estimated_timestamp` | timestamp ISO-8601 UTC ou `null` | Oui | Heure estimée de passage de la course. |
-| `delay_seconds` | integer | Oui | Retard en secondes. Une valeur positive indique un retard ; zéro indique aucun retard. |
-| `event_timestamp` | timestamp ISO-8601 UTC | Oui | Instant auquel l'information métier est observée. |
-| `ingested_at` | timestamp ISO-8601 UTC | Oui | Instant auquel le producteur envoie l'événement dans Kafka. |
+Dans ce tableau, « obligatoire » décrit le contrat attendu, pas la totalité des vérifications Silver.
 
-Les timestamps doivent être exprimés en UTC avec le suffixe `Z` lorsqu'ils
-sont sérialisés dans le payload. Les champs horaires marqués comme
-obligatoires doivent être présents dans un événement conforme ; leurs
-valeurs peuvent être `null` uniquement lorsque le contrat l'autorise
-explicitement.
+| Champ | Type du payload | Obligatoire | Description |
+|---|---|---:|---|
+| `event_id` | string UUID | Oui | Identifiant de l’observation. UUID nouveau en simulation ; déterministe dans le mapping réel. Clé de déduplication Silver. |
+| `event_type` | string | Oui | Valeur attendue : `trip_update`. |
+| `source` | string | Oui | `simulation_java`, `simulation` ou `sncf_gtfs_rt`, selon le producteur. |
+| `schema_version` | integer | Oui | Version canonique attendue : `1`. |
+| `trip_id` | string | Oui | Identifiant de course dans le flux ; clé Kafka. Ce n’est pas l’identifiant d’un véhicule physique. |
+| `route_id` | string | Oui | Identifiant de ligne dans le référentiel correspondant au parcours. Les exemples H/J/L/O/R ne limitent pas les valeurs réelles. |
+| `stop_id` | string | Oui | Identifiant d’arrêt dans le référentiel correspondant au parcours. |
+| `scheduled_timestamp` | string ISO-8601 UTC ou `null` | Clé oui | Horaire théorique ; dans le mapping réel, reconstitué par `time - delay`, sans lecture de l’horaire dans `stop_times.txt`. |
+| `estimated_timestamp` | string ISO-8601 UTC ou `null` | Clé oui | Horaire estimé ; dans le mapping réel, issu du champ `time` de l’arrivée ou du départ retenu. |
+| `delay_seconds` | integer signé | Oui | Écart en secondes : positif = retard ; zéro = écart nul ; négatif = avance. |
+| `event_timestamp` | string ISO-8601 UTC | Oui | Instant d’observation. Dans le parcours réel, timestamp de publication de l’instantané GTFS-RT, pas heure de passage ni heure de rejeu. |
+| `ingested_at` | string ISO-8601 UTC | Oui | Timestamp porté par le payload à sa génération/export. Conservé lors du rejeu JSONL ; ce n’est pas nécessairement l’heure de publication Kafka ni l’ingestion Bronze. |
+
+Les timestamps non nuls du payload conforme sont exprimés en UTC avec le suffixe `Z`. Les identifiants sont des chaînes non vides ; ils ne doivent pas être remplacés par les noms de lignes ou d’arrêts.
+
+Les clés `scheduled_timestamp` et `estimated_timestamp` appartiennent au format canonique. Pour la compatibilité du format, une valeur `null` signifie un horaire indisponible ; elle ne signifie jamais « zéro retard ». Le mapping réel actuel retient seulement des événements disposant explicitement de `time` et `delay` : il produit donc les deux horaires non nuls. Les producteurs de simulation nominaux les renseignent également.
+
+### Trois horloges à distinguer
+
+1. Observation métier : `event_timestamp` du payload. Le parcours réel utilise le timestamp du flux archivé.
+2. Génération/export du payload : `ingested_at` dans le JSON. Sa valeur n’est pas remplacée par l’heure du rejeu.
+3. Ingestion technique : Bronze ajoute son propre `ingested_at`, ainsi que `ingestion_date`, `kafka_timestamp`, topic, partition et offset.
+
+Dans la transformation Python fournie, `ingested_at` reste la colonne héritée de Bronze ; le champ `_event.ingested_at` du JSON n’est pas sélectionné séparément dans Silver. Le timestamp du payload reste consultable dans `payload_json` en Bronze. Il ne faut donc pas présenter le champ Silver homonyme comme une conservation distincte du timestamp du producteur. Pour exploiter les deux en Silver, ajouter ultérieurement des colonnes explicitement nommées et les tester.
+
+### Mapping SNCF GTFS-RT retenu
+
+Le mapping documenté pour le parcours réel applique les choix suivants :
+
+- Conserver les courses et mises à jour d’arrêt `SCHEDULED`.
+- Exclure les courses `ADDED` et `CANCELED`, ainsi que les arrêts `SKIPPED`, avec des compteurs de conversion.
+- Retenir en priorité l’arrivée si elle contient explicitement `time` et `delay` ; sinon essayer le départ avec ces deux champs explicites.
+- Préserver un retard explicitement égal à zéro et les valeurs négatives ; ne pas confondre champ absent et valeur zéro.
+- Affecter `estimated_timestamp` depuis le `time` choisi et reconstituer `scheduled_timestamp = time - delay`.
+- Résoudre les identifiants avec les références GTFS statiques du lot ; enrichir les noms lors du traitement Silver.
+
+Une exclusion de conversion avant Kafka n’est pas un rejet Silver. Les observations retenues ne couvrent pas toutes les catégories d’événements GTFS-RT ni une mesure exhaustive de la ponctualité.
+
+### Identité des observations et rejeu
+
+Dans le parcours réel, l’identifiant est déterministe à partir de l’observation et de ses caractéristiques. `ingested_at` n’intervient pas dans cette identité. Réexporter la même observation sans changement de ses caractéristiques doit conserver son identifiant ; un nouvel instantané ayant un autre timestamp d’observation constitue une nouvelle observation.
+
+Cette propriété n’autorise pas à republier aveuglément un export. L’idempotence du producteur Kafka n’élimine pas les renvois applicatifs entre deux exécutions distinctes. La déduplication Silver est bornée par un watermark d’un jour sur `event_timestamp` et utilise `event_id` ; elle ne constitue pas une mémoire globale illimitée des identifiants.
+
+Un nouvel instantané peut contenir une nouvelle observation du même passage. Les agrégats ne sélectionnent pas automatiquement la dernière prévision de chaque passage.
 
 ## Règles attendues du contrat
 
-Un événement conforme au contrat doit respecter les règles suivantes.
-Toutes ne sont pas encore contrôlées par Silver.
+Un événement nominal conforme doit respecter les règles suivantes. Toutes ne sont pas encore contrôlées par Silver.
 
-1. `event_id` est présent et non vide.
+1. `event_id` est un UUID présent et non vide.
 2. `event_type` vaut `trip_update`.
 3. `schema_version` vaut `1`.
-4. `trip_id`, `route_id` et `stop_id` sont présents et non vides.
-5. `delay_seconds` est un nombre entier.
-6. `event_timestamp` et `ingested_at` sont des timestamps ISO-8601 valides.
-7. Si `scheduled_timestamp` et `estimated_timestamp` existent, alors :
+4. `source` correspond au producteur et au parcours choisis.
+5. `trip_id`, `route_id` et `stop_id` sont présents, non vides et correspondent au périmètre de références.
+6. `delay_seconds` est un entier signé compatible avec le schéma entier Spark ; une valeur négative est autorisée et représente une avance.
+7. `event_timestamp` et `ingested_at` du payload sont des timestamps ISO-8601 UTC valides, sérialisés avec `Z`.
+8. Les horaires non nuls sont des timestamps ISO-8601 UTC valides. Lorsque les deux sont renseignés :
 
    ```text
    estimated_timestamp - scheduled_timestamp = delay_seconds
    ```
 
-8. `delay_seconds` est supérieur ou égal à zéro pour un retard classique.
+9. La clé Kafka vaut `trip_id` pour le parcours nominal.
+10. Le topic et la source sont cohérents : ne pas mélanger observations réelles et simulation.
+
+Il n’existe pas de règle générale `delay_seconds >= 0`. Le signe du retard est une information métier à conserver, non une cause de rejet.
+
+Le statut « conforme au contrat » est plus exigeant que « accepté par la validation Silver actuelle ». Par exemple, un message peut passer les contrôles Silver sans que son UUID, sa source ou sa version aient été vérifiés.
 
 ## Couverture actuelle de la validation Silver
 
-La transformation Silver contrôle actuellement :
+La couverture ci-dessous reprend la transformation et l’inspection Python fournies, ainsi que les comportements documentés du pipeline. Elle doit être revalidée si ces fichiers changent : ce contrat n’ajoute aucun contrôle au code.
 
-- Les erreurs de parsing JSON ou de conformité au schéma Spark.
-- `event_id` et `trip_id` : non nuls et non vides après suppression des espaces en début et fin.
-- `event_timestamp` : convertible en timestamp.
-- `delay_seconds` : non nul après parsing avec le type entier.
-- Le calcul `delay_minutes = delay_seconds / 60.0`.
+### Validation événementielle
 
-La première erreur détectée est enregistrée dans `validation_error`.
-Les événements invalides sont conservés dans :
+`parse_and_validate_trip_updates` :
+
+- Parse `payload_json` avec le schéma Spark et exploite `_corrupt_record` pour les erreurs signalées par le parseur.
+- Vérifie `event_id` et `trip_id` : non nuls et non vides après examen avec `trim`.
+- Convertit `event_timestamp` et vérifie qu’il n’est pas nul après conversion.
+- Vérifie `delay_seconds` : non nul après parsing avec le type entier.
+- Calcule `delay_minutes = delay_seconds / 60.0`.
+- Convertit les horaires en timestamps, sans contrôle dédié de leur présence ni de leur cohérence avec le retard.
+
+La première erreur détectée est conservée dans `validation_error`, selon cet ordre :
+
+| Priorité | Code | Condition vérifiée |
+|---:|---|---|
+| 1 | `invalid_json_or_schema` | `_corrupt_record` est renseigné. |
+| 2 | `missing_event_id` | Identifiant d’événement nul ou vide après `trim`. |
+| 3 | `missing_trip_id` | Identifiant de course nul ou vide après `trim`. |
+| 4 | `invalid_or_missing_event_timestamp` | Timestamp d’observation nul après conversion. |
+| 5 | `invalid_or_missing_delay_seconds` | Retard nul après parsing entier. |
+
+Ce mécanisme ne garantit ni un diagnostic de toutes les erreurs d’un message ni une validation stricte de l’ensemble du JSON contre le contrat. Un type incompatible peut déjà entraîner une erreur du parseur, avant les contrôles de champs.
+
+Les événements classés invalides sont conservés avec leur payload, leurs métadonnées Kafka, leur motif et leur timestamp de rejet :
 
 ```text
-data/lakehouse/silver/rejected_events
+Simulation : data/lakehouse/silver/rejected_events
+Réel       : data/lakehouse_real/silver/rejected_events
 ```
 
-Ne sont pas encore contrôlés explicitement :
+Les événements sans erreur de validation suivent la déduplication avec watermark, puis l’enrichissement. Les doublons éliminés par la déduplication ne sont pas des rejets de validation. Le compteur `rejected_events` ne représente donc pas toutes les observations éventuellement absentes du résultat final, notamment les exclusions avant Kafka.
 
-- Le format UUID de `event_id`.
-- La valeur attendue de `event_type`.
-- La valeur attendue de `schema_version`.
-- La présence non vide de `source`, `route_id` et `stop_id`.
-- La validité de `ingested_at` fourni dans le payload.
-- La présence explicite du fuseau UTC dans les timestamps.
-- La cohérence entre les horaires et `delay_seconds`.
-- L'interdiction des retards négatifs.
+### Inspection bloquante avant Gold
 
-L'inspection de la table Silver contrôle également :
+`inspect_silver.py` vérifie :
 
-- Les doublons d'`event_id`.
-- Les champs obligatoires retenus.
-- La cohérence entre `delay_seconds` et `delay_minutes`.
-- La présence des identifiants de ligne et d'arrêt à enrichir.
+- L’absence de doublons d’`event_id` dans la table des événements valides.
+- Les champs requis effectivement contrôlés : `event_id` et `trip_id` non nuls/non vides, `event_timestamp` non nul et `delay_seconds` non nul.
+- La cohérence de `delay_minutes` avec `delay_seconds / 60.0`, avec une tolérance de `1e-9`, et l’absence de minutes nulles ou `NaN`.
 
-Cette inspection s'exécute avant les calculs Gold et la publication
-PostgreSQL.
+Une anomalie de ces contrôles bloque la suite du pipeline. Le script affiche également les identifiants `route_id` et `stop_id` : cet affichage ne constitue pas une vérification bloquante de leur résolution ni des noms enrichis.
+
+### Règles non garanties par les contrôles Silver actuels
+
+| Règle attendue | Couverture actuelle |
+|---|---|
+| Format UUID de `event_id` | Non vérifié explicitement. |
+| Valeurs de `event_type`, `source`, `schema_version` | Non vérifiées explicitement comme valeurs métier attendues. |
+| `source`, `route_id`, `stop_id` présents et non vides | Pas de contrôle dédié dans les fonctions de validation décrites. |
+| Résolution de tous les noms de ligne et d’arrêt | Les jointures d’enrichissement seules ne le garantissent pas ; inspection/contrôle dédié nécessaire. |
+| Validité du `ingested_at` contenu dans le JSON | Pas de contrôle dédié ; ne pas le confondre avec l’ingestion Bronze. |
+| Présence explicite du fuseau UTC et du suffixe `Z` | La conversion Spark ne constitue pas ce contrôle strict. |
+| Présence et validité des deux horaires | Conversion, mais pas de contrôle de conformité dédié. |
+| Cohérence horaires / `delay_seconds` | Pas de contrôle Silver dédié. |
+| Égalité clé Kafka / `trip_id` et cohérence topic / source | Pas de contrôle dédié dans la transformation décrite. |
+| Rejet métier des versions inconnues | Non garanti par la seule présence de `schema_version`. |
+
+Les retards négatifs ne figurent pas parmi les anomalies manquantes : ils sont autorisés par le contrat.
 
 ## Exemple métier
 
@@ -139,7 +231,15 @@ Ligne : H
 Arrêt : stop_87271010
 Horaire prévu : 14:30 UTC
 Horaire estimé : 14:30 UTC
-Retard : 0 seconde = 0 minute
+Écart : 0 seconde = 0 minute
+```
+
+Une avance doit également conserver son signe :
+
+```text
+Horaire prévu : 14:30 UTC
+Horaire estimé : 14:28 UTC
+Écart : -120 secondes = -2 minutes
 ```
 
 Un retard est considéré comme significatif lorsque :
@@ -148,14 +248,23 @@ Un retard est considéré comme significatif lorsque :
 delay_seconds > 300
 ```
 
-Cela correspond à strictement plus de cinq minutes de retard.
+Cela correspond à strictement plus de cinq minutes de retard. Un retard de 300 secondes exactement n’est pas significatif ; une avance non plus.
 
-Un retard de exactement 300 secondes, soit 5 minutes, n'est donc pas
-compté comme un retard significatif dans les agrégats Gold.
+### Sémantique des agrégats Gold
+
+- `event_count` compte des observations, pas des trains uniques.
+- `delayed_event_count` compte les observations d’arrêt dont le retard est strictement supérieur à cinq minutes, par arrêt et par jour.
+- `delayed_trip_count` compte les courses distinctes avec au moins une observation au-delà du seuil, par ligne et par fenêtre. Sa somme sur plusieurs fenêtres n’est pas un nombre de trains uniques sur toute la période.
+- `event_date` et les fenêtres de 15 minutes sont calculés depuis `event_timestamp`, en UTC pour les traitements configurés ainsi. Ils représentent la date d’observation du flux, pas nécessairement celle du passage.
+- Les moyennes portent sur les écarts signés conservés : ne pas remplacer les avances par zéro sans décision métier et modification explicites des traitements.
+- Une moyenne recomposée sur plusieurs agrégats doit être pondérée par `event_count`. Les moyennes Gold étant arrondies, cette recomposition peut être légèrement approximative.
+- Les tables par ligne/fenêtre et par arrêt/jour représentent les mêmes observations à des granularités différentes : ne pas additionner leurs volumes.
+
+Ces indicateurs décrivent les observations sélectionnées, pas la ponctualité finale du réseau ni une couverture continue de la période.
 
 ## Modèles de simulation actuels
 
-Les cinq modèles Java actuellement disponibles sont :
+Les cinq modèles Java documentés sont :
 
 | `trip_id` | `route_id` | `stop_id` | Retard |
 |---|---|---|---:|
@@ -172,22 +281,20 @@ spark/resources/simulation/routes.csv
 spark/resources/simulation/stops.csv
 ```
 
-Ces libellés sont simulés et ne représentent pas de vrais noms de lignes
-ou de gares SNCF.
+Ces libellés sont simulés et ne représentent pas de vrais noms de lignes ou de gares SNCF. Ce tableau décrit les modèles Java, pas une garantie d’identité avec les modèles du simulateur Python complémentaire.
+
+Le parcours réel utilise les références préparées dans `data/reference/real/<lot>/`, avec `routes.csv`, `stops.csv` et le manifeste de provenance. Le dossier historique `data/reference/real/sncf` reste distinct des dossiers de collecte. Les chemins effectifs doivent correspondre au lot traité ; un changement de référentiel ne réenrichit pas automatiquement les lignes déjà écrites dans Silver.
 
 ## Évolution du contrat
 
-Le champ `schema_version` permet de faire évoluer le contrat sans
-interpréter les nouvelles versions comme la version actuelle.
+`schema_version` décrit la version du payload, pas la version du flux GTFS ni celle du référentiel. Sa présence prépare l’évolution du format, mais le contrôle métier des versions acceptées reste à implémenter dans Silver.
 
-Lorsqu'une modification incompatible sera nécessaire :
+Lorsqu’une modification incompatible sera nécessaire :
 
-1. Incrémenter `schema_version`.
-2. Documenter les nouveaux champs ou changements de type.
-3. Mettre à jour le schéma Spark.
-4. Ajouter ou modifier les tests Java et Python.
-5. Vérifier la compatibilité entre Bronze, Silver, Gold et PostgreSQL.
+1. Incrémenter `schema_version` et définir les versions acceptées ou rejetées.
+2. Documenter les champs, types, valeurs autorisées et nouvelles sémantiques.
+3. Mettre à jour le schéma Spark et les contrôles de validation concernés.
+4. Ajouter ou modifier les tests Java et Python, y compris les cas invalides et les versions inconnues.
+5. Vérifier la compatibilité entre producteurs, Bronze, Silver, Gold et PostgreSQL, ainsi que les impacts sur les checkpoints et les données existantes avant tout déploiement.
 
-La connexion à une source GTFS-RT réelle devra conserver ce contrat
-canonique ou utiliser une étape de normalisation avant la publication
-dans Kafka.
+La présente mise à jour décrit le format canonique `1` déjà utilisé et les choix du mapping réel ; elle ne modifie ni les producteurs ni les traitements. Les tests d’intégration, les résultats d’échantillons et la reprise sans nouvelle publication sont documentés dans le README et le runbook : ils ne remplacent pas les contrôles du contrat et ne constituent pas une garantie universelle d’exactly-once.
