@@ -5,8 +5,10 @@ from pathlib import Path
 import psycopg
 from psycopg import sql
 from delta import configure_spark_with_delta_pip
-from pyspark.sql import SparkSession
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.functions import date_format
+
+from jobs.postgres_target import validate_postgres_target
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -64,33 +66,107 @@ def collect_small_table(dataframe, table_name):
     return rows
 
 
+def publish_gold_dataframes(
+    lines: DataFrame,
+    stations: DataFrame,
+    lakehouse_root: Path,
+    target_schema: str,
+) -> tuple[int, int]:
+    validate_postgres_target(
+        lakehouse_root=lakehouse_root,
+        target_schema=target_schema,
+        project_root=PROJECT_ROOT,
+    )
+
+    lines = lines.select(
+        date_format("window_start", "yyyy-MM-dd HH:mm:ss")
+        .alias("window_start_utc"),
+        date_format("window_end", "yyyy-MM-dd HH:mm:ss")
+        .alias("window_end_utc"),
+        "route_id",
+        "line_name",
+        "event_count",
+        "delayed_trip_count",
+        "average_delay_minutes",
+        "max_delay_minutes",
+    )
+
+    line_rows = [
+        (
+            datetime.fromisoformat(row.window_start_utc),
+            datetime.fromisoformat(row.window_end_utc),
+            row.route_id,
+            row.line_name,
+            row.event_count,
+            row.delayed_trip_count,
+            row.average_delay_minutes,
+            row.max_delay_minutes,
+        )
+        for row in collect_small_table(lines, "Gold par ligne")
+    ]
+    station_rows = [
+        (
+            row.event_date,
+            row.stop_id,
+            row.stop_name,
+            row.delayed_event_count,
+            row.average_delay_minutes,
+            row.max_delay_minutes,
+            row.event_count,
+        )
+        for row in collect_small_table(
+            stations, "Gold par gare"
+        )
+    ]
+
+    with psycopg.connect(
+        host=os.getenv("POSTGRES_HOST", "localhost"),
+        port=int(os.getenv("POSTGRES_PORT", "5432")),
+        dbname=os.environ["POSTGRES_DB"],
+        user=os.environ["POSTGRES_USER"],
+        password=os.environ["POSTGRES_PASSWORD"],
+    ) as connection:
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                sql.SQL(LINE_UPSERT).format(
+                    table=sql.Identifier(
+                        target_schema,
+                        "gold_delay_by_line_15min",
+                    )
+                ),
+                line_rows,
+            )
+
+            cursor.executemany(
+                sql.SQL(STATION_UPSERT).format(
+                    table=sql.Identifier(
+                        target_schema,
+                        "gold_station_delay_daily",
+                    )
+                ),
+                station_rows,
+            )
+
+
+    return len(line_rows), len(station_rows)
+
+
 def main() -> None:
     target_schema = os.getenv("POSTGRES_TARGET_SCHEMA", "public")
 
-    allowed_targets = {
-        "public": PROJECT_ROOT / "data" / "lakehouse",
-        "sncf_real": PROJECT_ROOT / "data" / "lakehouse_real",
-    }
-
-    expected_root = allowed_targets.get(target_schema)
-
-    if expected_root is None:
-        raise ValueError(
-            f"Schéma PostgreSQL non autorisé : {target_schema}"
-        )
-
-    if LAKEHOUSE_ROOT.resolve() != expected_root.resolve():
-        raise ValueError(
-            "Couple lakehouse/schéma PostgreSQL incorrect : "
-            f"{LAKEHOUSE_ROOT} → {target_schema}"
-        )
+    validate_postgres_target(
+        lakehouse_root=LAKEHOUSE_ROOT,
+        target_schema=target_schema,
+        project_root=PROJECT_ROOT,
+    )
 
     print(f"Gold source : {GOLD_ROOT}")
     print(f"Schéma PostgreSQL cible : {target_schema}")
+
     builder = (
         SparkSession.builder
         .appName("sncf-publish-gold-postgres")
-        .master("local[*]")
+        .master(os.getenv("SPARK_MASTER", "local[*]"))
         .config(
             "spark.sql.extensions",
             "io.delta.sql.DeltaSparkSessionExtension",
@@ -105,85 +181,22 @@ def main() -> None:
     spark.sparkContext.setLogLevel("WARN")
 
     try:
-        lines = (
-            spark.read.format("delta")
-            .load(str(GOLD_ROOT / "delay_by_line_15min"))
-            .select(
-                date_format("window_start", "yyyy-MM-dd HH:mm:ss")
-                .alias("window_start_utc"),
-                date_format("window_end", "yyyy-MM-dd HH:mm:ss")
-                .alias("window_end_utc"),
-                "route_id",
-                "line_name",
-                "event_count",
-                "delayed_trip_count",
-                "average_delay_minutes",
-                "max_delay_minutes",
-            )
+        lines = spark.read.format("delta").load(
+            str(GOLD_ROOT / "delay_by_line_15min")
         )
-        stations = (
-            spark.read.format("delta")
-            .load(str(GOLD_ROOT / "station_delay_daily"))
+        stations = spark.read.format("delta").load(
+            str(GOLD_ROOT / "station_delay_daily")
         )
 
-        line_rows = [
-            (
-                datetime.fromisoformat(row.window_start_utc),
-                datetime.fromisoformat(row.window_end_utc),
-                row.route_id,
-                row.line_name,
-                row.event_count,
-                row.delayed_trip_count,
-                row.average_delay_minutes,
-                row.max_delay_minutes,
-            )
-            for row in collect_small_table(lines, "Gold par ligne")
-        ]
-        station_rows = [
-            (
-                row.event_date,
-                row.stop_id,
-                row.stop_name,
-                row.delayed_event_count,
-                row.average_delay_minutes,
-                row.max_delay_minutes,
-                row.event_count,
-            )
-            for row in collect_small_table(
-                stations, "Gold par gare"
-            )
-        ]
+        line_count, station_count = publish_gold_dataframes(
+            lines=lines,
+            stations=stations,
+            lakehouse_root=LAKEHOUSE_ROOT,
+            target_schema=target_schema,
+        )
 
-        with psycopg.connect(
-            host=os.getenv("POSTGRES_HOST", "localhost"),
-            port=int(os.getenv("POSTGRES_PORT", "5432")),
-            dbname=os.environ["POSTGRES_DB"],
-            user=os.environ["POSTGRES_USER"],
-            password=os.environ["POSTGRES_PASSWORD"],
-        ) as connection:
-            with connection.cursor() as cursor:
-                cursor.executemany(
-                    sql.SQL(LINE_UPSERT).format(
-                        table=sql.Identifier(
-                            target_schema,
-                            "gold_delay_by_line_15min",
-                        )
-                    ),
-                    line_rows,
-                )
-
-                cursor.executemany(
-                    sql.SQL(STATION_UPSERT).format(
-                        table=sql.Identifier(
-                            target_schema,
-                            "gold_station_delay_daily",
-                        )
-                    ),
-                    station_rows,
-                )
-
-        print(f"Gold line rows published: {len(line_rows)}")
-        print(f"Gold station rows published: {len(station_rows)}")
+        print(f"Gold line rows published: {line_count}")
+        print(f"Gold station rows published: {station_count}")
         print("Gold-to-PostgreSQL publication completed successfully.")
     finally:
         spark.stop()

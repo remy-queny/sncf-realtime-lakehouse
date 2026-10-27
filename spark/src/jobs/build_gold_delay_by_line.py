@@ -34,7 +34,7 @@ def main() -> None:
     builder = (
         SparkSession.builder
         .appName("sncf-gold-delay-by-line")
-        .master("local[*]")
+        .master(os.getenv("SPARK_MASTER", "local[*]"))
         .config(
             "spark.sql.extensions",
             "io.delta.sql.DeltaSparkSessionExtension",

@@ -165,3 +165,4 @@ docker-volumes/
 
 # Local simulation supervisor lock
 /data/validation/.active-simulation.lock
+/data/validation/.active-gold.lock

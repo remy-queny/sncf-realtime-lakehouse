@@ -66,6 +66,22 @@ def build_environment(project_root, directory, interval, base=None):
     return env
 
 
+def build_job_commands(project_root, directory, with_gold=False, gold_interval=30):
+    commands = [
+        (name, [sys.executable, str(project_root / f"spark/src/jobs/stream_{name}.py")])
+        for name in ("bronze", "silver")
+    ]
+    if with_gold:
+        commands.append((
+            "gold",
+            [
+                sys.executable, str(project_root / "scripts/run_active_gold.py"),
+                str(directory), "--interval", str(gold_interval),
+            ],
+        ))
+    return commands
+
+
 def unexpected_exit(processes):
     for name, process in processes:
         code = process.poll()
@@ -91,9 +107,14 @@ def stop_process(name, process, timeout):
         (signal.SIGKILL, 10),
     ):
         print(f"Arrêt {name} : {signal.Signals(signum).name}", flush=True)
-        signal_group(process, signum)
+        if name == "gold" and signum == signal.SIGINT:
+            process.send_signal(signum)
+        else:
+            signal_group(process, signum)
         try:
-            process.wait(timeout=wait_seconds)
+            code = process.wait(timeout=wait_seconds)
+            if name == "gold" and code != 0:
+                raise RuntimeError(f"Gold s'est arrêté avec le code {code}.")
             return forced
         except subprocess.TimeoutExpired:
             forced = True
@@ -102,14 +123,18 @@ def stop_process(name, process, timeout):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Superviser Bronze/Silver sur un périmètre de simulation déjà préparé."
+        description="Superviser Bronze/Silver et, en option, Gold/PostgreSQL en simulation."
     )
     parser.add_argument("test_directory", type=Path)
     parser.add_argument("--interval", type=positive_integer, default=10)
     parser.add_argument("--stop-timeout", type=positive_integer, default=30)
+    parser.add_argument("--with-gold", action="store_true")
+    parser.add_argument("--gold-interval", type=positive_integer, default=30)
     args = parser.parse_args(argv)
     try:
         directory = validate_test_directory(PROJECT_ROOT, args.test_directory)
+        if args.with_gold and not (PROJECT_ROOT / "scripts/run_active_gold.py").is_file():
+            raise ValueError("Le fichier scripts/run_active_gold.py est absent.")
     except ValueError as error:
         parser.error(str(error))
 
@@ -131,21 +156,27 @@ def main(argv=None):
             return 1
         log_directory.mkdir(parents=True, exist_ok=False)
         env = build_environment(PROJECT_ROOT, directory, args.interval)
+        commands = build_job_commands(
+            PROJECT_ROOT, directory, args.with_gold, args.gold_interval
+        )
         print(f"Simulation uniquement : {directory}", flush=True)
         print(f"Logs : {log_directory}", flush=True)
-        print("Aucune production Kafka, aucun Gold, aucune publication PostgreSQL.", flush=True)
+        if args.with_gold:
+            print("Gold activé : publication uniquement dans sncf_active_test.", flush=True)
+        else:
+            print("Gold et publication PostgreSQL désactivés.", flush=True)
+        print("Aucune production Kafka effectuée par le lanceur.", flush=True)
         try:
             for signum in (signal.SIGINT, signal.SIGTERM):
                 previous_handlers[signum] = signal.signal(
                     signum, lambda signum, frame: stop_requested.set()
                 )
-            for name in ("bronze", "silver"):
+            for name, command in commands:
                 if stop_requested.is_set():
                     break
                 log = stack.enter_context((log_directory / f"{name}.log").open("w"))
                 process = subprocess.Popen(
-                    [sys.executable, str(PROJECT_ROOT / f"spark/src/jobs/stream_{name}.py")],
-                    cwd=PROJECT_ROOT, env=env, stdout=log,
+                    command, cwd=PROJECT_ROOT, env=env, stdout=log,
                     stderr=subprocess.STDOUT, start_new_session=True,
                 )
                 processes.append((name, process))
