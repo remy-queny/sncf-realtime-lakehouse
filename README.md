@@ -6,7 +6,7 @@ Pipeline local de data engineering pour ingérer des observations de retard ferr
 Java → Kafka → PySpark → Delta Lake Bronze / Silver / Gold → PostgreSQL → Tableau Desktop
 ```
 
-> État au 17 octobre 2026 : pipeline de simulation fonctionnel ; parcours réel validé sur 110 observations d’arrêt issues des instantanés des 8 et 15 octobre 2026. Le nouveau lot de 100 observations couvre 8 courses, 6 lignes et 74 identifiants d’arrêt, dont 39 observations avec un retard strictement supérieur à cinq minutes. Les contrôles PostgreSQL confirment 7 agrégats ligne × fenêtre et 84 agrégats arrêt × jour ; Tableau affiche les données actualisées et le filtre de période a été testé. Le traitement réel dispose de `scripts/run_real_pipeline.sh`, sans collecte ni publication Kafka. La collecte, l’envoi et l’actualisation Tableau restent des étapes séparées, exécutées à la demande.
+> État au 27 octobre 2026 : parcours réel à la demande validé sur 110 observations issues des instantanés des 8 et 15 octobre ; publication PostgreSQL et restitution Tableau vérifiées. La reprise normale réelle a été validée le 20 octobre par comparaison avant/après. Le contrôle bloquant de complétude de l’enrichissement Silver et ses 14 cas ciblés ont été validés le 27 octobre, puis la suite Python et l’inspection réelle ont été confirmées sans erreur. Le pipeline ne collecte ni ne traite encore automatiquement les nouveaux flux en permanence. Décision de périmètre : ajouter un mode quasi-temps réel local à la V1 ; conserver le mode à la demande pour les tests et rejeux ; réserver Airflow à la V2. Ce nouveau mode reste à concevoir, implémenter et mesurer.
 
 ## Aperçu des dashboards Tableau
 
@@ -28,7 +28,7 @@ Java → Kafka → PySpark → Delta Lake Bronze / Silver / Gold → PostgreSQL 
 
 Les images référencées sont des captures statiques : les filtres ne sont manipulables que dans Tableau. Les captures de travail ont montré les nouvelles données ; les fichiers PNG aux chemins ci-dessus doivent être actualisés avec la version à 110 observations et leur rendu vérifié sur GitHub. Prévoir des captures sans panneaux d’édition, avec la colonne de retard maximal entièrement visible. La présence des liens dans ce README ne prouve pas que les nouveaux exports sont déjà versionnés.
 
-> Périmètre : 110 observations d’arrêt sélectionnées dans deux instantanés, datés des 8 et 15 octobre 2026. Le lot du 15 octobre a été rejoué le 17 octobre : il ne constitue pas une collecte en direct de ce jour-là. Ce résultat démontre le fonctionnement du pipeline et de la BI, pas la ponctualité globale du réseau. Le titre « Real-Time » décrit l’architecture événementielle ; les exécutions validées sont à la demande, pas un service permanent.
+> Périmètre : 110 observations d’arrêt sélectionnées dans deux instantanés, datés des 8 et 15 octobre 2026. Le lot du 15 octobre a été rejoué le 17 octobre : il ne constitue pas une collecte en direct de ce jour-là. Ce résultat démontre le fonctionnement du pipeline et de la BI, pas la ponctualité globale du réseau. Le titre « Real-Time » désigne l’ambition de la plateforme, pas une validation de fonctionnement permanent. Les exécutions démontrées restent à la demande ; le mode quasi-temps réel fait désormais partie du travail restant pour clôturer la V1 sur ce critère.
 
 La restitution principale est désormais Tableau Desktop Free Edition sur Mac, hors Docker. Metabase reste une validation historique et son service est encore présent dans le Docker Compose fourni ; son retrait n’est pas présenté comme réalisé.
 
@@ -93,6 +93,33 @@ Une collecte HTTP séparée est implémentée : `GtfsRealtimeHttpDownloader` té
 
 Voir [la validation historique de la source SNCF réelle](docs/real-source.md) pour le périmètre et les résultats du premier test. Certaines pages historiques mentionnent encore Metabase ; la présente version du README décrit l’avancement Tableau.
 
+### Fonctionnement actuel et objectif de clôture V1
+
+| Dimension | État validé | Objectif V1 restant à réaliser |
+|---|---|---|
+| Collecte | Instantané téléchargé à la demande | Collecter régulièrement des instantanés récents, avec cadence configurable et erreurs gérées |
+| Kafka | Publication contrôlée d’un JSONL sélectionné | Publier automatiquement les nouvelles observations, sans renvoyer aveuglément un instantané inchangé |
+| Bronze / Silver | Traitement incrémental avec `availableNow=True`, puis arrêt | Maintenir des requêtes actives en micro-batches, avec arrêt et reprise contrôlés |
+| Gold / PostgreSQL | Recalcul et publication à la demande | Mettre à jour les indicateurs automatiquement avec une sémantique cumulative correcte |
+| Fraîcheur | Non mesurée de bout en bout en fonctionnement actif | Mesurer l’âge de l’observation source et le délai de traversée jusqu’à PostgreSQL |
+| Tableau | Deux dashboards et actualisation manuelle validés | Vérifier les indicateurs récents après actualisation ; ne pas annoncer une UI actualisée automatiquement |
+| Airflow | Non intégré | Hors V1 ; orchestration des tâches planifiées en V2 |
+
+Le mode actif visé est du quasi-temps réel local : il fonctionne pendant une session de démonstration sur le Mac, sans exigence de disponibilité 24 h/24. Une fréquence de collecte ou une latence cible ne sera annoncée qu’après examen de la source, des ressources et des mesures. La fraîcheur de l’API reste une contrainte externe : un traitement rapide ne rend pas frais un instantané déjà ancien.
+
+Architecture cible du mode actif — non implémentée à ce stade :
+
+```text
+Collecteur/producteur Java actif
+    → nouveaux instantanés SNCF normalisés
+    → Kafka
+    → Bronze et Silver maintenus actifs en micro-batches
+    → mise à jour automatique et contrôlée de Gold / PostgreSQL
+    → Tableau : lecture des données publiées, actualisation visuelle distincte
+```
+
+Cette cible s’ajoute au parcours reproductible à la demande ; elle ne remplace pas les commandes de rejeu existantes. Les étapes et critères d’acceptation sont détaillés dans la feuille de route de la section 6. Aucune nouvelle commande de démarrage actif n’est présentée comme disponible avant son implémentation.
+
 ### Organisation du dépôt
 
 ```text
@@ -127,7 +154,7 @@ Voir [la validation historique de la source SNCF réelle](docs/real-source.md) p
 │   ├── run_pipeline.sh               # Parcours standard de simulation
 │   ├── run_real_pipeline.sh          # Traitement réel jusqu’à PostgreSQL, sans nouvel envoi
 │   ├── simulate_trip_updates.py
-│   └── snapshot_resume_state.py      # Captures du parcours de simulation
+│   └── snapshot_resume_state.py      # Captures simulation/réel via --mode
 ├── spark/
 │   ├── requirements.txt
 │   ├── resources/simulation/
@@ -198,7 +225,7 @@ Cette isolation est logique ; les deux schémas utilisent actuellement la même 
 
 ### Contrat et règles métier
 
-Le format JSON est décrit dans [le contrat de données](docs/data-contract.md). Ce document doit encore être aligné sur toutes les décisions du mapping réel, notamment les retards négatifs et les timestamps reconstitués.
+Le format JSON est décrit dans [le contrat de données](docs/data-contract.md), actualisé pour la simulation et le mapping réel : timestamps, horaires reconstitués, avances autorisées, identité des observations et séparation entre exigences du contrat et contrôles effectivement implémentés. Le runbook documente les commandes validées et les procédures de reprise ; le mode quasi-temps réel n’y est pas encore une procédure exécutable.
 
 Règles communes :
 
@@ -383,7 +410,7 @@ Pour une nouvelle collecte, remplacer l’argument par le dossier de référence
 
 Le script enchaîne Bronze, Silver, les contrôles Silver, les deux agrégations Gold et la publication dans `sncf_real`, en utilisant `data/lakehouse_real` et les checkpoints réels existants. Il ne télécharge aucun flux, ne publie aucun message Kafka et n’actualise pas Tableau. Ne pas supprimer les checkpoints pour une relance.
 
-Cette commande remplace l’exécution manuelle des étapes 6 et 7 ci-dessous ; ne pas effectuer les deux procédures pour un même contrôle. Elle a été exécutée avec succès dans l’installation locale, sans constituer une preuve de reprise réelle par comparaison avant/après ni une validation depuis un nouveau clone.
+Cette commande remplace l’exécution manuelle des étapes 6 et 7 ci-dessous ; ne pas effectuer les deux procédures pour un même contrôle. Elle a été exécutée avec succès dans l’installation locale. Une reprise normale réelle a ensuite été vérifiée par comparaison avant/après le 20 octobre (section 5). Le parcours réel depuis un nouveau clone et la reprise du futur mode actif restent à valider séparément.
 
 ### Étape 1 — Télécharger les sources
 
@@ -833,7 +860,27 @@ Les suites couvrent notamment la sérialisation JSON, la cohérence des événem
 
 Huit tests ont été ajoutés pour `GtfsStopEventMapper` : priorité à l'arrivée, repli sur le départ avec retard zéro explicite, absence de retard explicite, retard négatif, stabilité de l'identifiant lorsque seule l'ingestion change, nouvel identifiant pour un autre instantané, exclusions métier et absence de ligne.
 
-Les dernières validations locales documentées dans le README précédent portaient sur 12 tests Java et 40 cas Python. Le code fourni comporte maintenant 18 méthodes Java annotées `@Test`, dont 6 dans `GtfsRealtimeHttpDownloaderTest` ; ce comptage statique ne prouve pas que la suite courante a été exécutée avec succès. Relancer les commandes ci-dessus et consulter le rapport Maven ainsi que la CI pour le résultat du commit courant. Les 40 cas Python historiques comprennent les cas paramétrés, pas nécessairement 40 fonctions de test.
+Les compteurs de 12 tests Java et 40 cas Python appartiennent aux validations historiques. Les suites Java et Python ont été confirmées réussies le 20 octobre, sans nouveau total précis communiqué. Un comptage statique de méthodes Java `@Test` ne remplace pas un rapport d’exécution.
+
+Le 27 octobre, le contrôle `check_enrichment` a été ajouté à `inspect_silver.py`, après les contrôles existants. Il vérifie que `route_id`, `stop_id`, `line_name` et `stop_name` sont non nuls et non vides après `trim`. Ses nouveaux tests utilisent des DataFrames en mémoire :
+
+- Une ligne complète acceptée.
+- Douze cas de valeur manquante : quatre champs × `null`, chaîne vide, espaces.
+- Un mélange de lignes complètes et incomplètes refusé.
+
+Résultat ciblé observé : `14 passed, 38 deselected in 8.95s`. Les 38 cas désélectionnés étaient exclus par le filtre, pas en échec. La suite Python complète puis l’inspection Silver réelle ont ensuite été confirmées sans erreur, sans nouveau total de tests ou de lignes communiqué.
+
+Pour reproduire uniquement les cas ciblés :
+
+```bash
+PYTHONPATH="$PWD/spark/src" \
+PYSPARK_PYTHON="$PWD/.venv/bin/python" \
+.venv/bin/python -m pytest \
+  spark/tests/test_trip_updates.py \
+  -k "enrichment_check" -v
+```
+
+Exécuter ensuite la suite Python complète. Consulter le rapport Maven, le bilan pytest et la CI du commit courant pour les nombres effectivement exécutés. Les cas paramétrés sont comptés séparément ; un nombre de cas n’est pas un nombre de fonctions.
 
 ### Intégration continue
 
@@ -865,40 +912,79 @@ bash scripts/run_pipeline.sh
 
 Le simulateur injecte des cas avec `trip_id` absent, retard non numérique ou timestamp invalide. Silver conserve les rejets dans `silver/rejected_events` avec leur payload et un motif d'erreur.
 
-Avant les calculs Gold et la publication PostgreSQL, `inspect_silver.py` vérifie les doublons d'`event_id`, les champs obligatoires contrôlés et la cohérence entre secondes et minutes. Une anomalie bloquante interrompt le pipeline ; les événements déjà classés dans `rejected_events` restent consultables.
+Avant les calculs Gold et la publication PostgreSQL, `inspect_silver.py` vérifie les doublons d’`event_id`, les champs obligatoires retenus, la cohérence secondes/minutes et la complétude de `route_id`, `stop_id`, `line_name`, `stop_name`. Une anomalie bloquante interrompt le pipeline ; les événements déjà classés dans `rejected_events` restent consultables. Un enrichissement incomplet n’entraîne pas de déplacement automatique de l’observation vers les rejets : les données restent dans Silver pendant que l’inspection bloque la suite.
 
-Ces contrôles ne garantissent pas encore la conformité à toutes les exigences du contrat ni la présence de toutes les références d'enrichissement.
+Ces contrôles ne garantissent pas la conformité à toutes les exigences du contrat ni la correspondance sémantique de chaque libellé avec son identifiant GTFS. Le contrôle de complétude vérifie des champs renseignés ; il ne détecte pas à lui seul un nom non vide mais incorrect ni une référence périmée.
 
 ### Reprise après relancement
 
-Les captures et commandes ci-dessous concernent la simulation. Le script `snapshot_resume_state.py` existant n'a pas été adapté pour comparer le parcours réel ; ne pas l'utiliser comme une preuve de reprise réelle.
+`snapshot_resume_state.py` prend désormais `--mode simulation` (valeur par défaut) ou `--mode real`. Le mode sélectionne les tables Silver et le schéma PostgreSQL ; ne pas comparer des captures de modes ou d’installations différents.
 
-Exécuter ce contrôle avec les chemins et le schéma de simulation, sans variables réelles persistantes dans le terminal.
+Les requêtes Bronze et Silver disposent de checkpoints distincts. PostgreSQL utilise des upserts sur les clés `(window_start, route_id)` et `(event_date, stop_id)`. Les captures comparent le contenu Silver et PostgreSQL, pas les fichiers physiques de checkpoints ni l’historique Delta.
 
-Les requêtes Bronze et Silver disposent de checkpoints distincts. PostgreSQL utilise des upserts sur les clés `(window_start, route_id)` et `(event_date, stop_id)`.
+#### Simulation — validation historique conservée
 
-Les captures `data/validation/reprise_before.json` et `reprise_after.json` présentent le même état Silver / PostgreSQL pour le scénario fourni. Elles documentent un contrôle local, pas une garantie universelle d'exactly-once.
-
-Pour reproduire un contrôle sans produire de nouvel événement, choisir deux noms de fichiers encore inexistants :
+Les captures `data/validation/reprise_before.json` et `reprise_after.json` présentent le même état pour le scénario de simulation documenté. Pour reproduire le contrôle, choisir des noms encore inexistants, sélectionner le bon projet Compose et ne publier aucun événement entre les captures :
 
 ```bash
 export PYTHONPATH="$PWD/spark/src"
 export PYSPARK_PYTHON="$PWD/.venv/bin/python"
 
-.venv/bin/python scripts/snapshot_resume_state.py data/validation/check_before.json
-bash scripts/run_pipeline.sh
-.venv/bin/python scripts/snapshot_resume_state.py data/validation/check_after.json
+.venv/bin/python scripts/snapshot_resume_state.py \
+  data/validation/check_before.json --mode simulation
+```
+
+Si la capture réussit, relancer seulement le traitement de simulation :
+
+```bash
+(
+  unset LAKEHOUSE_ROOT CHECKPOINT_ROOT GTFS_REFERENCE_ROOT
+  unset BRONZE_TRIP_UPDATES_PATH BRONZE_TRIP_UPDATES_CHECKPOINT_PATH
+  unset POSTGRES_TARGET_SCHEMA
+  export KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+  export KAFKA_TRIP_UPDATES_TOPIC=sncf.trip_updates.raw
+  bash scripts/run_pipeline.sh
+)
+```
+
+Après réussite du traitement, capturer puis comparer :
+
+```bash
+.venv/bin/python scripts/snapshot_resume_state.py \
+  data/validation/check_after.json --mode simulation
 
 diff -u data/validation/check_before.json data/validation/check_after.json
 ```
 
-Ne pas supprimer les checkpoints pour un simple redémarrage : ils conservent l'état de progression des traitements. La déduplication Silver est bornée par le watermark, et non garantie sans limite temporelle.
+Arrêter à la première erreur ; une capture après un traitement en échec ne valide pas sa reprise.
 
-Pour arrêter les services sans supprimer leurs volumes :
+#### Réel — comparaison vérifiée le 20 octobre 2026
+
+Dans l’installation originale, une capture a été créée avant une relance de `run_real_pipeline.sh`, puis une seconde après, sans nouvelle publication Kafka :
+
+```text
+data/validation/real_resume_2026-10-20_before.json
+data/validation/real_resume_2026-10-20_after.json
+```
+
+L’état avant comprenait 110 observations Silver, 0 rejet, 7 agrégats ligne/fenêtre et 84 agrégats arrêt/jour dans `sncf_real`. La comparaison a retourné :
+
+```text
+Comparaison OK : les captures avant et après sont identiques.
+```
+
+Ce résultat valide la stabilité du contenu capturé après une relance normale du parcours à la demande. Il ne démontre ni une récupération après interruption en cours d’écriture, ni une reprise après perte du volume Kafka, ni la reprise du futur mode actif. La procédure reproductible avec un dossier de contrôle neuf figure dans [le runbook](docs/runbook.md).
+
+Le script de capture refuse l’écrasement d’un fichier et limite chaque table Silver capturée à 10 000 lignes ; cette limite appartient au contrôle local. Les captures contenant les données restent locales sauf décision explicite d’archivage après vérification.
+
+Ne pas supprimer les checkpoints pour un redémarrage normal : ils conservent la progression des traitements. La déduplication est bornée par le watermark ; aucune garantie universelle d’exactly-once n’est annoncée. Toute évolution vers le mode actif doit examiner la compatibilité des requêtes, de leur état et des checkpoints avant de les réutiliser.
+
+Pour arrêter les services sans supprimer les volumes :
 
 ```bash
 docker compose down
 ```
+
 ### Validation depuis un clone isolé
 
 Un test local a été réalisé dans un clone utilisant le projet Compose
@@ -930,17 +1016,21 @@ universelle d'exactly-once ni une validation des dashboards Tableau. La BI a ét
 
 - [x] Infrastructure Docker Compose : Kafka, Kafka UI et PostgreSQL ; service Metabase historique encore présent.
 - [x] Topics de simulation et réel créés par des scripts versionnés.
-- [x] Contrat JSON documenté pour la simulation.
+- [x] Contrat JSON actualisé pour la simulation et le mapping réel, avec limites des contrôles documentées.
 - [x] Producteur Java simulé et simulateur Python avec cas invalides.
 - [x] Ingestion Bronze, validation / déduplication / enrichissement Silver.
 - [x] Rejets Silver traçables et contrôles bloquants avant Gold.
 - [x] Agrégats Gold par ligne et par arrêt, publication PostgreSQL par upsert.
 - [x] Scripts de démonstration et de traitement de simulation.
-- [x] Tests locaux : 12 tests Java et 40 cas Python validés.
+- [x] Suites Java/Python confirmées réussies le 20 octobre ; 14 cas ciblés d’enrichissement réussis et suite Python complète confirmée le 27 octobre, sans total global inventé.
 - [x] CI GitHub Actions existante pour Java et Python/Spark.
 - [x] Dashboard de simulation documenté et capture versionnée.
 - [x] Runbook de simulation et validation locale depuis un clone.
 - [x] Contrôle de reprise de simulation sans nouvel événement.
+- [x] Reprise normale réelle vérifiée le 20 octobre : captures complètes Silver/PostgreSQL identiques avant/après.
+- [x] Capture d’état paramétrable : `--mode simulation` / `--mode real`.
+- [x] Contrôle bloquant de complétude de l’enrichissement, tests négatifs en mémoire et inspection réelle réussis le 27 octobre.
+- [x] Contrat et runbook mis à jour pour le parcours réel, la reprise et le nouveau contrôle d’enrichissement.
 - [x] Téléchargement manuel et inspection d'un instantané SNCF réel.
 - [x] Lecture Java du GTFS statique, mapping réel et 8 tests dédiés.
 - [x] Export JSONL réel complet de l'instantané testé : 16 978 événements.
@@ -962,25 +1052,73 @@ universelle d'exactly-once ni une validation des dashboards Tableau. La BI a ét
 - [x] Téléchargement HTTP Java implémenté dans un composant dédié, avec délais, contrôles et tests présents dans le code.
 - [x] Script de collecte/préparation réel présent : références, manifeste, instantané et export JSONL, sans publication Kafka ni Spark.
 
-### À finaliser pour la V1
+### Priorité de clôture V1 — mode quasi-temps réel local
 
-- [ ] Vérifier le script réel et ses prérequis dans un clone isolé ; compléter le runbook sans annoncer une orchestration collecte → BI automatique.
-- [ ] Aligner `docs/data-contract.md` sur le mapping réel et les décisions métier.
-- [ ] Compléter les contrôles Silver sur les champs et règles du contrat retenu ; archiver les compteurs détaillés du nouveau lot.
-- [ ] Tester la reprise du parcours réel sans nouvelle publication et conserver une preuve distincte.
-- [ ] Ajouter des analyses temporelles après validation de plusieurs fenêtres et de davantage de données.
-- [ ] Revalider l’exécution de la suite de tests courante et archiver les résultats du commit retenu.
+Décision du 27 octobre 2026 : ajouter un mode actif avant de déclarer la V1 terminée sur l’objectif « Real-Time ». Les éléments suivants sont une feuille de route, pas des fonctionnalités déjà livrées. Le mode à la demande et les commandes existantes restent disponibles pour les tests et les rejeux.
+
+#### Étape 1 — cadrer les modes et la compatibilité
+
+- [ ] Examiner les classes Java, scripts et jobs Spark actuels avant toute modification.
+- [ ] Définir un mode actif explicite sans changer silencieusement le comportement `availableNow` existant.
+- [ ] Choisir les paramètres de collecte, de traitement, de volume et d’arrêt après analyse des ressources locales et de la source ; ne pas promettre une latence avant mesure.
+- [ ] Examiner la compatibilité des checkpoints et les chemins de validation. Prévoir une validation isolée si nécessaire, sans supprimer les checkpoints ou les données historiques.
+
+#### Étape 2 — collecter et publier automatiquement
+
+- [ ] Ajouter un collecteur/producteur Java actif qui récupère régulièrement les instantanés récents, les normalise et publie les observations retenues dans Kafka.
+- [ ] Réutiliser un référentiel GTFS préparé et compatible ; ne pas retélécharger ou reconstruire inutilement les références à chaque interrogation du flux.
+- [ ] Rendre la cadence configurable, respecter les conditions d’accès à la source et gérer délais, erreurs HTTP, nouvelles tentatives bornées et arrêt propre.
+- [ ] Détecter un instantané inchangé et éviter sa republication aveugle ; conserver les identifiants déterministes et la différence entre doublon et nouvelle observation du même passage.
+- [ ] Définir et tester la reprise après publication partielle : ne pas considérer un lot comme entièrement livré avant ses accusés de réception. L’idempotence Kafka seule ne règle pas les renvois entre exécutions.
+- [ ] Définir un volume compatible avec le Mac ; si un échantillonnage est nécessaire, le rendre explicite et ne pas annoncer une couverture exhaustive du réseau.
+
+#### Étape 3 — maintenir Bronze et Silver actifs
+
+- [ ] Ajouter un fonctionnement en micro-batches périodiques sans arrêt automatique une fois le stock disponible traité.
+- [ ] Conserver validation, traçabilité Kafka, déduplication bornée par watermark, enrichissement et gestion des rejets.
+- [ ] Prévoir lancement, arrêt propre, propagation des erreurs et reprise ; les scripts séquentiels actuels attendent la fin des jobs et ne suffisent donc pas à orchestrer des requêtes permanentes.
+- [ ] Adapter et tester la stratégie des contrôles de qualité en mode actif, sans présenter les tests batch existants comme une validation suffisante de ce nouveau fonctionnement.
+
+#### Étape 4 — actualiser Gold et PostgreSQL automatiquement
+
+- [ ] Choisir et implémenter une publication par micro-batch ou selon une cadence automatique définie, avec des jobs/sessions gérés explicitement.
+- [ ] Préserver la sémantique cumulative des agrégats : ne pas remplacer le total d’une fenêtre ou d’un jour par le résultat de son seul dernier micro-batch.
+- [ ] Gérer observations successives, doublons, données tardives et retries sans addition répétée ou perte silencieuse des observations retenues.
+- [ ] Respecter l’upsert et les clés existantes ; mesurer le coût des recalculs et éviter de redémarrer toute la chaîne Spark à chaque observation.
+- [ ] Vérifier que le volume et la méthode de publication restent compatibles avec la limite actuelle du publisher ; ne pas annoncer sa suppression ou sa scalabilité avant modification et mesure.
+
+#### Étape 5 — mesurer fraîcheur et fiabilité
+
+- [ ] Tracer séparément le timestamp d’observation du flux, l’heure de réception par le collecteur et la disponibilité effective dans PostgreSQL. Le `ingested_at` du payload archivé ne suffit pas à mesurer le délai d’un rejeu.
+- [ ] Mesurer la fraîcheur de bout en bout (observation source → PostgreSQL) et le délai propre au pipeline (réception collecteur → PostgreSQL), avec des horloges cohérentes et un périmètre défini.
+- [ ] Détecter l’absence de nouvel instantané ou de nouvelles données sans la confondre avec un pipeline à faible latence ; une source stagnante ne doit pas être présentée comme fraîche.
+- [ ] Conserver un bilan de démonstration : plusieurs instantanés récents distincts, volumes retenus/rejetés, mesures, anomalies et limites. Aucun objectif chiffré n’est encore déclaré atteint.
+- [ ] Tester un arrêt/redémarrage du mode actif et les scénarios d’échec retenus, en distinguant cette preuve du test de relance normale du 20 octobre.
+
+#### Étape 6 — démontrer et documenter
+
+- [ ] Démontrer qu’un seul lancement suffit à collecter, publier et traiter plusieurs instantanés récents, sans commande manuelle intermédiaire, jusqu’à PostgreSQL.
+- [ ] Comparer des indicateurs SQL avec les données détaillées ou un jeu de référence sur le même périmètre.
+- [ ] Vérifier la consultation dans Tableau après actualisation ; présenter clairement le caractère manuel de l’actualisation visuelle.
+- [ ] Mettre à jour les commandes, le runbook, le diagramme et les limites après implémentation, puis enregistrer une démonstration reproductible.
+
+Le critère de réussite est un flux actif jusqu’à PostgreSQL, observé et mesuré pendant une session locale. Il n’exige ni Airflow, ni cloud, ni disponibilité 24 h/24, ni pilotage automatique de Tableau Desktop. Le démarrage manuel initial est acceptable ; l’enchaînement des nouveaux instantanés ne doit plus nécessiter d’intervention manuelle.
+
+### Autres éléments à finaliser pour la V1
+
+- [ ] Vérifier le parcours réel et ses prérequis depuis un clone isolé, séparément de la validation historique de simulation.
+- [ ] Compléter les contrôles du contrat encore non couverts si retenus pour la clôture, sans annoncer une conformité totale déjà acquise.
+- [ ] Conserver les rapports des suites de tests et vérifier la CI du commit retenu ; une réussite locale ne prouve pas celle d’un nouveau commit sur GitHub.
+- [ ] Sécuriser les ports publiés sur l’interface locale et prévoir un compte BI en lecture seule ; ces modifications ne sont pas encore déclarées réalisées.
 - [ ] Vérifier le classeur Tableau avant versionnement et tester sa réouverture depuis une configuration reproductible.
-- [ ] Archiver dans le dépôt les preuves de l’actualisation Tableau déjà exécutée : contrôles SQL, captures propres et description du scénario.
-- [ ] Retirer les références Metabase devenues inutiles dans Compose et les documents, sans supprimer les volumes métier.
-- [ ] Actualiser les deux images du README avec les données à 110 observations, vérifier le guide Tableau et leur rendu sur GitHub.
-- [ ] Compléter si nécessaire les exports PNG natifs et la vidéo de démonstration.
-- [ ] Compléter le runbook pour les sources, références et publications réelles.
-- [ ] Compléter la documentation d'architecture, des timestamps et de la sémantique des indicateurs.
-- [ ] Ajouter les contrôles de qualité de code prévus, sans recréer la CI existante.
-- [ ] Acter le périmètre de clôture concernant les alertes et la DLQ Kafka.
+- [ ] Archiver les preuves déjà produites : contrôles SQL, reprise réelle et actualisation Tableau, avec des captures propres sans secrets.
+- [ ] Actualiser les deux images du README et vérifier le guide Tableau ainsi que leur rendu sur GitHub.
+- [ ] Retirer les références et le service Metabase devenus inutiles après vérification des dépendances, sans supprimer les volumes métier.
+- [ ] Compléter la documentation d’architecture et les contrôles de qualité de code, sans recréer la CI existante.
+- [ ] Ajouter des analyses temporelles seulement après validation de plusieurs fenêtres et d’un historique suffisant ; elles ne sont pas nécessaires pour prouver à elles seules le transport actif du flux.
+- [ ] Acter le périmètre de clôture des alertes et de la DLQ Kafka ; ne pas les présenter comme implémentées.
 
-La V1 n'est pas déclarée terminée uniquement parce que l'échantillon réel fonctionne.
+La V1 n’est pas déclarée terminée parce que le rejeu des 110 observations fonctionne : le mode actif choisi comme objectif doit encore être implémenté et démontré.
 
 ### Limites actuelles
 
@@ -990,7 +1128,7 @@ La V1 n'est pas déclarée terminée uniquement parce que l'échantillon réel f
 - Les courses ajoutées ou annulées et les arrêts sautés sont exclus du premier périmètre de retard, avec des compteurs d'exclusion.
 - Les horaires théoriques réels sont reconstitués depuis `time - delay` ; les fenêtres utilisent la publication du flux.
 - Plusieurs instantanés peuvent produire plusieurs observations du même passage : les agrégats actuels ne constituent pas un calcul de ponctualité finale ou de dernière prévision par passage.
-- Les traitements sont lancés à la demande, pas en continu.
+- Les traitements actuellement implémentés sont lancés à la demande, pas en continu. La feuille de route V1 du mode actif ne constitue pas une preuve de streaming permanent déjà livré.
 - Gold est recalculé avec `overwrite` depuis Silver.
 - PostgreSQL est alimenté par upsert ; les lignes qui disparaissent de Gold ne sont pas automatiquement supprimées de PostgreSQL.
 - Le publisher collecte les agrégats sur le driver et refuse plus de 10 000 lignes par table.
@@ -1006,7 +1144,9 @@ La V1 n'est pas déclarée terminée uniquement parce que l'échantillon réel f
 
 ### Évolutions envisagées
 
-Airflow relève de la V2 : rafraîchissement des références, contrôles périodiques, recalculs et publications batch. Il n'est pas requis pour clôturer l'exécution locale V1.
+Airflow reste en V2, après validation du mode quasi-temps réel local : rafraîchissement planifié des références GTFS, contrôles périodiques, recalculs historiques et publications batch selon leurs dépendances. Il ne doit pas consommer chaque événement Kafka, remplacer Spark ni piloter l’interface Tableau Desktop.
+
+Le passage au mode actif est un travail d’ingestion, de traitement et de publication prévu pour la V1 ; l’ajout d’Airflow seul ne le réalise pas. Les futurs DAG n’ont pas encore été implémentés ou validés. La gestion des références en continu et la reproductibilité devront être documentées avant leur orchestration.
 
 Azure reste une trajectoire optionnelle, sans dépendance cloud ni coût imposé à la V1.
 
