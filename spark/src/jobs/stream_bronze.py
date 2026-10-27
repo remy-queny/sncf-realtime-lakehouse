@@ -4,6 +4,7 @@ from pathlib import Path
 from delta import configure_spark_with_delta_pip
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, current_timestamp, lit, to_date
+from jobs.streaming_config import get_trigger_options
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -69,6 +70,8 @@ def create_spark_session() -> SparkSession:
 
 
 def main() -> None:
+    trigger_options = get_trigger_options()
+
     spark = create_spark_session()
     spark.sparkContext.setLogLevel("WARN")
 
@@ -101,7 +104,7 @@ def main() -> None:
             .format("delta")
             .outputMode("append")
             .option("checkpointLocation", str(CHECKPOINT_PATH))
-            .trigger(availableNow=True)
+            .trigger(**trigger_options)
             .start(str(BRONZE_PATH))
         )
 

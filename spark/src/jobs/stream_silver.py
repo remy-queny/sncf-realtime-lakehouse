@@ -10,6 +10,8 @@ from transforms.trip_updates import (
     parse_and_validate_trip_updates,
 )
 
+from jobs.streaming_config import get_trigger_options
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -73,6 +75,8 @@ def create_spark_session() -> SparkSession:
 
 
 def main() -> None:
+    trigger_options = get_trigger_options()
+
     spark = create_spark_session()
     spark.sparkContext.setLogLevel("WARN")
 
@@ -168,7 +172,7 @@ def main() -> None:
                 "checkpointLocation",
                 str(SILVER_REJECTED_EVENTS_CHECKPOINT),
             )
-            .trigger(availableNow=True)
+            .trigger(**trigger_options)
             .start(str(SILVER_REJECTED_EVENTS_PATH))
         )
 
@@ -181,12 +185,20 @@ def main() -> None:
                 str(SILVER_TRIP_DELAYS_CHECKPOINT),
             )
             .partitionBy("event_date")
-            .trigger(availableNow=True)
+            .trigger(**trigger_options)
             .start(str(SILVER_TRIP_DELAYS_PATH))
         )
 
-        rejected_query.awaitTermination()
-        valid_query.awaitTermination()
+        queries = (rejected_query, valid_query)
+
+        while True:
+            terminated = [
+                query.awaitTermination(timeout=1)
+                for query in queries
+            ]
+
+            if all(terminated):
+                break
 
         print(f"Silver valid path: {SILVER_TRIP_DELAYS_PATH}")
         print(f"Silver rejected path: {SILVER_REJECTED_EVENTS_PATH}")
