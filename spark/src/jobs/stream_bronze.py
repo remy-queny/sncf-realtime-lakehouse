@@ -52,7 +52,7 @@ def create_spark_session() -> SparkSession:
     builder = (
         SparkSession.builder
         .appName("sncf-bronze-trip-updates")
-        .master("local[*]")
+        .master(os.getenv("SPARK_MASTER", "local[*]"))
         .config(
             "spark.sql.extensions",
             "io.delta.sql.DeltaSparkSessionExtension",
@@ -108,6 +108,11 @@ def main() -> None:
             .start(str(BRONZE_PATH))
         )
 
+        print(f"Bronze path: {BRONZE_PATH}", flush=True)
+        print(f"Checkpoint path: {CHECKPOINT_PATH}", flush=True)
+        print(f"Trigger: {trigger_options}", flush=True)
+        print(f"Query active: {query.isActive}", flush=True)
+        
         query.awaitTermination()
 
         print(f"Bronze Delta path: {BRONZE_PATH}")

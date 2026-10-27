@@ -59,7 +59,7 @@ def create_spark_session() -> SparkSession:
     builder = (
         SparkSession.builder
         .appName("sncf-silver-trip-delays")
-        .master("local[*]")
+        .master(os.getenv("SPARK_MASTER", "local[*]"))
         .config(
             "spark.sql.extensions",
             "io.delta.sql.DeltaSparkSessionExtension",
@@ -188,6 +188,13 @@ def main() -> None:
             .trigger(**trigger_options)
             .start(str(SILVER_TRIP_DELAYS_PATH))
         )
+
+        print(f"Bronze source: {BRONZE_PATH}", flush=True)
+        print(f"Silver valid path: {SILVER_TRIP_DELAYS_PATH}", flush=True)
+        print(f"Silver rejected path: {SILVER_REJECTED_EVENTS_PATH}", flush=True)
+        print(f"Trigger: {trigger_options}", flush=True)
+        print(f"Valid query active: {valid_query.isActive}", flush=True)
+        print(f"Rejected query active: {rejected_query.isActive}", flush=True)
 
         queries = (rejected_query, valid_query)
 

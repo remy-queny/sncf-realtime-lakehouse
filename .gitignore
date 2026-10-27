@@ -158,3 +158,10 @@ docker-volumes/
 /data/lakehouse_real/
 /data/checkpoints_real/
 /data/reference/real/
+
+# Local streaming integration tests
+/data/validation/active-stream-*/
+/data/validation/trigger-regression-*/
+
+# Local simulation supervisor lock
+/data/validation/.active-simulation.lock
