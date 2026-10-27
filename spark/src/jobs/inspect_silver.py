@@ -94,6 +94,35 @@ def check_delay_consistency(valid: DataFrame) -> None:
 
     print("Contrôle de cohérence des retards : OK")
 
+def check_enrichment(valid: DataFrame) -> None:
+    invalid_rows = valid.filter(
+        col("route_id").isNull()
+        | (length(trim(col("route_id"))) == 0)
+        | col("stop_id").isNull()
+        | (length(trim(col("stop_id"))) == 0)
+        | col("line_name").isNull()
+        | (length(trim(col("line_name"))) == 0)
+        | col("stop_name").isNull()
+        | (length(trim(col("stop_name"))) == 0)
+    )
+
+    if invalid_rows.take(1):
+        invalid_rows.select(
+            "event_id",
+            "route_id",
+            "line_name",
+            "stop_id",
+            "stop_name",
+        ).show(10, truncate=False)
+
+        raise RuntimeError(
+            "Échec du contrôle qualité Silver : enrichissement incomplet ; "
+            "des identifiants ou noms de ligne/arrêt sont absents ou vides."
+        )
+
+    print("Contrôle de l'enrichissement : OK")
+
+
 def main() -> None:
     builder = (
         SparkSession.builder
@@ -148,6 +177,8 @@ def main() -> None:
         check_required_fields(valid)
 
         check_delay_consistency(valid)
+
+        check_enrichment(valid)
 
         print("Route and stop IDs to enrich:")
         valid.select("route_id", "stop_id").distinct().show(

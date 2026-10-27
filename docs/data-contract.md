@@ -203,8 +203,15 @@ Les événements sans erreur de validation suivent la déduplication avec waterm
 - L’absence de doublons d’`event_id` dans la table des événements valides.
 - Les champs requis effectivement contrôlés : `event_id` et `trip_id` non nuls/non vides, `event_timestamp` non nul et `delay_seconds` non nul.
 - La cohérence de `delay_minutes` avec `delay_seconds / 60.0`, avec une tolérance de `1e-9`, et l’absence de minutes nulles ou `NaN`.
+- La complétude de l’enrichissement via `check_enrichment` : `route_id`, `stop_id`, `line_name` et `stop_name` doivent être non nuls et non vides après suppression des espaces en début et fin (`trim`).
 
-Une anomalie de ces contrôles bloque la suite du pipeline. Le script affiche également les identifiants `route_id` et `stop_id` : cet affichage ne constitue pas une vérification bloquante de leur résolution ni des noms enrichis.
+Une anomalie de ces contrôles bloque la suite du pipeline avant les agrégations Gold et la publication PostgreSQL.
+
+`check_enrichment` affiche jusqu’à dix lignes incomplètes avec `event_id`, les identifiants et les noms concernés, puis lève une `RuntimeError` contenant `enrichissement incomplet`. Si aucune ligne n’est incomplète, il affiche `Contrôle de l'enrichissement : OK`.
+
+Ce contrôle vérifie la complétude des quatre champs dans les données Silver inspectées. Il ne valide pas la correspondance sémantique de chaque nom avec son identifiant, la version du référentiel ni la fraîcheur des références. Un nom non vide mais incorrect ne sera pas détecté par ce seul contrôle.
+
+Une anomalie d’enrichissement ne crée pas de `validation_error` supplémentaire et ne déplace pas automatiquement l’observation vers `rejected_events`. L’événement peut avoir passé la validation événementielle et être déjà écrit dans `trip_delays` ; c’est alors l’inspection qui bloque les traitements suivants. Les lignes existantes ne sont ni corrigées ni supprimées par cette inspection.
 
 ### Règles non garanties par les contrôles Silver actuels
 
@@ -212,8 +219,8 @@ Une anomalie de ces contrôles bloque la suite du pipeline. Le script affiche é
 |---|---|
 | Format UUID de `event_id` | Non vérifié explicitement. |
 | Valeurs de `event_type`, `source`, `schema_version` | Non vérifiées explicitement comme valeurs métier attendues. |
-| `source`, `route_id`, `stop_id` présents et non vides | Pas de contrôle dédié dans les fonctions de validation décrites. |
-| Résolution de tous les noms de ligne et d’arrêt | Les jointures d’enrichissement seules ne le garantissent pas ; inspection/contrôle dédié nécessaire. |
+| `source` présente et non vide | Pas de contrôle dédié. La présence non nulle/non vide de `route_id` et `stop_id` est désormais vérifiée par `check_enrichment` lors de l’inspection. |
+| Correspondance sémantique des noms avec les identifiants GTFS | Non garantie par le contrôle de complétude. `line_name` et `stop_name` sont contrôlés non nuls/non vides, sans comparaison dédiée à un référentiel de référence. |
 | Validité du `ingested_at` contenu dans le JSON | Pas de contrôle dédié ; ne pas le confondre avec l’ingestion Bronze. |
 | Présence explicite du fuseau UTC et du suffixe `Z` | La conversion Spark ne constitue pas ce contrôle strict. |
 | Présence et validité des deux horaires | Conversion, mais pas de contrôle de conformité dédié. |
@@ -297,4 +304,4 @@ Lorsqu’une modification incompatible sera nécessaire :
 4. Ajouter ou modifier les tests Java et Python, y compris les cas invalides et les versions inconnues.
 5. Vérifier la compatibilité entre producteurs, Bronze, Silver, Gold et PostgreSQL, ainsi que les impacts sur les checkpoints et les données existantes avant tout déploiement.
 
-La présente mise à jour décrit le format canonique `1` déjà utilisé et les choix du mapping réel ; elle ne modifie ni les producteurs ni les traitements. Les tests d’intégration, les résultats d’échantillons et la reprise sans nouvelle publication sont documentés dans le README et le runbook : ils ne remplacent pas les contrôles du contrat et ne constituent pas une garantie universelle d’exactly-once.
+Cette documentation décrit le format canonique `1`, les choix du mapping réel et le contrôle de complétude `check_enrichment` ajouté à l’inspection Silver. Aucun champ du payload n’est modifié par ce contrôle ; cette mise à jour documentaire n’ajoute pas de modification de code supplémentaire. Les tests d’intégration, les résultats d’échantillons et la reprise sans nouvelle publication sont documentés dans le README et le runbook : ils ne remplacent pas les contrôles du contrat et ne constituent pas une garantie universelle d’exactly-once.

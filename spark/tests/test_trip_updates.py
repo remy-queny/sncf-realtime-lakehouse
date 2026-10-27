@@ -8,6 +8,7 @@ from transforms.trip_updates import (
     parse_and_validate_trip_updates,
 )
 from jobs.inspect_silver import (
+    check_enrichment,
     check_delay_consistency,
     check_duplicate_event_ids,
     check_required_fields,
@@ -511,3 +512,86 @@ def test_delay_consistency_rejects_invalid_conversion(
             check_delay_consistency(valid)
     finally:
         spark.stop()
+
+
+ENRICHMENT_SCHEMA = (
+    "event_id string, "
+    "route_id string, "
+    "line_name string, "
+    "stop_id string, "
+    "stop_name string"
+)
+
+
+@pytest.fixture(scope="module")
+def enrichment_spark():
+    spark = create_spark_session()
+    try:
+        yield spark
+    finally:
+        spark.stop()
+
+
+@pytest.fixture
+def valid_enrichment_row():
+    return {
+        "event_id": "event-enrichment-check-001",
+        "route_id": "J",
+        "line_name": "Ligne J (simulation)",
+        "stop_id": "stop_87271003",
+        "stop_name": "Arrêt simulé J",
+    }
+
+
+def test_enrichment_check_accepts_complete_rows(
+    enrichment_spark,
+    valid_enrichment_row,
+) -> None:
+    valid = enrichment_spark.createDataFrame(
+        [valid_enrichment_row],
+        schema=ENRICHMENT_SCHEMA,
+    )
+
+    check_enrichment(valid)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["route_id", "stop_id", "line_name", "stop_name"],
+)
+@pytest.mark.parametrize(
+    "value",
+    [None, "", "   "],
+    ids=["null", "empty", "blank"],
+)
+def test_enrichment_check_rejects_missing_values(
+    enrichment_spark,
+    valid_enrichment_row,
+    field: str,
+    value: str | None,
+) -> None:
+    row = valid_enrichment_row.copy()
+    row[field] = value
+    valid = enrichment_spark.createDataFrame(
+        [row],
+        schema=ENRICHMENT_SCHEMA,
+    )
+
+    with pytest.raises(RuntimeError, match="enrichissement incomplet"):
+        check_enrichment(valid)
+
+
+def test_enrichment_check_rejects_mixed_complete_and_incomplete_rows(
+    enrichment_spark,
+    valid_enrichment_row,
+) -> None:
+    incomplete = valid_enrichment_row.copy()
+    incomplete["event_id"] = "event-enrichment-check-002"
+    incomplete["stop_name"] = None
+    valid = enrichment_spark.createDataFrame(
+        [valid_enrichment_row, incomplete],
+        schema=ENRICHMENT_SCHEMA,
+    )
+
+    with pytest.raises(RuntimeError, match="enrichissement incomplet"):
+        check_enrichment(valid)

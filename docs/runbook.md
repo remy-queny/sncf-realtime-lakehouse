@@ -544,8 +544,20 @@ Vérifier dans les résultats le périmètre lu, les effectifs valides/rejetés 
 - Absence de doublons d’`event_id` dans la table des événements valides.
 - Champs effectivement contrôlés : `event_id`, `trip_id`, `event_timestamp`, `delay_seconds`.
 - Cohérence entre `delay_seconds` et `delay_minutes`.
+- Complétude de l’enrichissement via `check_enrichment` : `route_id`, `stop_id`, `line_name` et `stop_name` non nuls et non vides après suppression des espaces en début et fin (`trim`).
 
-Le simple affichage de `route_id` et `stop_id` ne prouve pas leur résolution. Toutes les exigences du contrat ne sont pas encore contrôlées. Voir `docs/data-contract.md` pour la couverture et les limites, notamment les timestamps du payload et les retards négatifs autorisés.
+Les quatre messages de réussite attendus sont :
+
+```text
+Contrôle des doublons : OK
+Contrôle des champs obligatoires : OK
+Contrôle de cohérence des retards : OK
+Contrôle de l'enrichissement : OK
+```
+
+En cas d’enrichissement incomplet, l’inspection affiche jusqu’à dix lignes concernées puis lève une `RuntimeError`. Le pipeline doit s’arrêter avant Gold et la publication PostgreSQL. Les observations restent dans Silver : elles ne sont pas automatiquement déplacées dans `rejected_events` et aucune donnée n’est réécrite par l’inspection.
+
+Ce contrôle vérifie que les quatre champs sont renseignés, pas que chaque nom est sémantiquement correct pour l’identifiant GTFS ni que le référentiel est à jour. Toutes les exigences du contrat ne sont pas encore contrôlées. Voir `docs/data-contract.md` pour la couverture et les limites, notamment les timestamps du payload et les retards négatifs autorisés.
 
 Tables de rejets :
 
@@ -573,6 +585,28 @@ PYTHONPATH="$PWD/spark/src" \
 PYSPARK_PYTHON="$PWD/.venv/bin/python" \
 .venv/bin/python -m pytest spark/tests -v
 ```
+
+### Tests du contrôle d’enrichissement
+
+Pour exécuter uniquement les nouveaux cas, sans lecture ni écriture des tables métier :
+
+```bash
+PYTHONPATH="$PWD/spark/src" \
+PYSPARK_PYTHON="$PWD/.venv/bin/python" \
+.venv/bin/python -m pytest \
+  spark/tests/test_trip_updates.py \
+  -k "enrichment_check" -v
+```
+
+Les 14 cas couvrent une ligne complète, douze valeurs manquantes (quatre champs × `null`, chaîne vide, espaces) et un mélange de lignes complètes et incomplètes. Ils utilisent des DataFrames créés en mémoire ; aucun producteur Kafka ni job de publication PostgreSQL n’est lancé.
+
+Validation du 27 octobre 2026 :
+
+- Résultat ciblé observé : `14 passed, 38 deselected in 8.95s`. Les 38 cas désélectionnés étaient exclus par le filtre, pas en échec.
+- Suite Python complète ensuite confirmée sans erreur ; aucun nouveau total précis n’est déduit de ce retour.
+- Inspection Silver réelle exécutée ensuite et confirmée sans erreur, y compris le nouveau contrôle. Les compteurs de cette inspection n’ont pas été recopiés dans le bilan : ne pas en déduire un nouvel effectif.
+
+Après une modification de ce contrôle, exécuter d’abord les tests ciblés, puis la suite Python complète et enfin l’inspection indépendante du périmètre voulu (section 5). Ne pas republier des événements pour tester un cas invalide : les cas négatifs restent en mémoire.
 
 ### CI GitHub Actions
 
@@ -730,7 +764,16 @@ un problème d'enrichissement ou de qualité.
 
 ### Enrichissement non résolu
 
-Les noms proviennent de :
+Le contrôle `check_enrichment` échoue si un des champs `route_id`, `stop_id`, `line_name` ou `stop_name` est nul, vide ou composé uniquement d’espaces. La `RuntimeError` contient `enrichissement incomplet` et les lignes affichées donnent les identifiants à examiner.
+
+1. Identifier les champs manquants dans les lignes affichées.
+2. Vérifier le périmètre réel/simulation et le dossier de références utilisé lors de l’enrichissement.
+3. Rechercher les identifiants concernés dans les références du lot et contrôler les noms associés.
+4. Déterminer une procédure de correction des données existantes avant de relancer le pipeline ; modifier une référence ne met pas automatiquement Silver à jour.
+
+Ne pas remplacer un nom absent par une valeur artificielle pour rendre le contrôle vert. Ne pas déplacer manuellement l’événement vers les rejets ni supprimer son checkpoint pour masquer l’anomalie. Ce contrôle de complétude ne suffit pas à détecter un nom renseigné mais incorrect.
+
+En simulation, les noms proviennent de :
 
 ```text
 spark/resources/simulation/routes.csv
