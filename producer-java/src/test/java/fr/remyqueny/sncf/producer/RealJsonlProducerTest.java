@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RealJsonlProducerTest {
 
     private static final String BOOTSTRAP = "localhost:9092";
-    private static final String TOPIC = "sncf.tripupdates.real.raw";
+    private static final String TOPIC = "sncf.trip_updates.real.raw";
     private static final ObjectMapper JSON = new ObjectMapper();
 
     @TempDir

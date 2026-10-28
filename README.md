@@ -2,7 +2,7 @@
 
 Projet local de data engineering pour normaliser des observations SNCF GTFS-RT, les traiter dans un lakehouse Delta et restituer des indicateurs de retard dans Tableau.
 
-> État au 27 octobre 2026 : parcours à la demande validé sur 110 observations réelles ; mode actif supervisé démontré en simulation jusqu’à PostgreSQL sur 4 observations. La collecte SNCF périodique et le parcours réel actif restent à implémenter et valider. Airflow reste prévu en V2.
+> État au 28 octobre 2026 : parcours à la demande validé sur 110 observations réelles ; mode actif supervisé démontré en simulation jusqu’à PostgreSQL sur 4 observations. Une publication réelle supplémentaire de 100 observations a été acquittée par Kafka, puis sa non-republication a été vérifiée. Ce nouveau lot n’a pas encore été traité par Spark ni publié dans PostgreSQL/Tableau. La suite est organisée en six jalons de clôture ; le parcours réel actif complet reste à valider. Airflow reste prévu en V2.
 
 ## Architecture
 
@@ -52,6 +52,35 @@ Les captures concernent le parcours réel historique, pas le test actif de simul
 
 Le premier instantané a produit 16 978 événements normalisés/exportés ; seuls 10 de ce lot, puis 100 d’un second lot, ont été validés de bout en bout. L’échantillon ne représente pas la ponctualité globale du réseau. Les compteurs portent sur des observations, pas sur des trains uniques ; le seuil est strictement supérieur à cinq minutes.
 
+### Publication réelle contrôlée — 28 octobre 2026
+
+Cette validation porte sur la publication Kafka et son registre local, pas encore sur le traitement analytique du nouveau lot.
+
+| Contrôle | Résultat observé |
+|---|---|
+| Périmètre sélectionné | 400 observations réparties en 4 lots de 100 |
+| Registre après le premier envoi | 1 lot `published`, 3 lots `pending`, aucun `publishing` ni `uncertain` |
+| Lot effectivement publié | 100 observations vers `sncf.trip_updates.real.raw` |
+| Reçu de publication | 100 accusés de réception, partition `0`, offsets `110` à `209` |
+| Offset de fin après publication | `210` |
+| Relance du même lot déjà publié | `published_now: false`, statut conservé à `published` |
+| Contrôle broker avant/après cette relance | Offset de fin inchangé à `210`, comparaison des captures sans différence |
+
+Le test valide l’absence de republication du lot déjà terminé dans ce scénario. Il ne démontre ni une garantie générale d’exactly-once ni la récupération après une publication partielle ou un résultat incertain. Les 300 observations des trois autres lots restent en attente ; leur publication n’est pas un prérequis au contrôle du premier lot de bout en bout.
+
+Une capture analytique a été réalisée avant de traiter le nouveau lot :
+
+| Élément capturé | État avant traitement |
+|---|---:|
+| Silver `trip_delays` | 110 observations |
+| Silver `rejected_events` | 0 rejet |
+| `sncf_real.gold_delay_by_line_15min` | 7 agrégats |
+| `sncf_real.gold_station_delay_daily` | 84 agrégats |
+
+La validation analytique de bout en bout reste limitée aux 110 observations historiques. Les 100 observations supplémentaires acquittées par Kafka ne portent pas encore ce total à 210 dans Silver, PostgreSQL ou Tableau. Les nombres d’agrégats ne sont pas des nombres d’observations.
+
+Preuves locales de cette session, sous `data/source_checks/active-real-ldCSXV/` : registre et reçus dans `publication/`, contrôles d’offset dans `publication/check-csPBuD/`, capture analytique dans `serving-check-FP8X7F/before.json`. Ces dossiers ne sont pas fournis par Git et ne constituent pas une procédure d’initialisation depuis un clone.
+
 ### Simulation — mode actif supervisé
 
 - Bronze/Silver actifs et propagation d’un nouvel événement jusqu’à PostgreSQL sans recalcul manuel : passage de 3 à 4 observations.
@@ -64,7 +93,7 @@ Le premier instantané a produit 16 978 événements normalisés/exportés ; seu
 
 Ces essais portent sur un très petit volume simulé, pas sur une collecte SNCF continue. Les durées affichées par les cycles excluent le démarrage de Spark et ne mesurent pas la latence Kafka/source → PostgreSQL.
 
-Dernière suite Python complète confirmée : 118 tests réussis. Après ajout des six tests de supervision commune, 25 tests ciblés ont réussi ; la nouvelle suite complète finale et la CI du commit retenu restent à confirmer.
+Historique des résultats de tests documentés : 118 tests Python réussis sur une suite complète, puis 25 tests ciblés après ajout des six tests de supervision commune. Ces compteurs ne constituent pas un nouveau relevé global au 28 octobre. Les contrôles Kafka ci-dessus sont des validations d’intégration distinctes et ne permettent pas de déduire un nouveau total de tests. La suite complète finale et la CI du commit retenu restent à confirmer.
 
 ## Utilisation
 
@@ -83,11 +112,28 @@ Kafka UI reste optionnel. Metabase n’est pas nécessaire au parcours Tableau n
 Avec topic, tables, environnement Python et références déjà prêts :
 
 ```bash
-bash scripts/run_real_pipeline.sh \
+STREAMING_MODE=available_now bash scripts/run_real_pipeline.sh \
   data/reference/real/collection-eYyLYD
 ```
 
-Ce chemin est celui du lot historique : utiliser les références du lot traité. Il n’est pas recréé par Git. Cette commande traite les données déjà disponibles dans Kafka ; elle ne collecte ni ne publie de nouveaux événements. Actualiser ensuite les deux sources dans Tableau.
+Ce chemin est celui du lot historique : utiliser les références compatibles avec le lot traité, sans reprendre cet exemple aveuglément pour la collecte du 28 octobre. Il n’est pas recréé par Git. Le mode `available_now` est explicite pour conserver une exécution à la demande. Cette commande traite les données déjà disponibles dans Kafka ; elle ne collecte ni ne publie de nouveaux événements. Conserver les checkpoints existants et ne pas lancer un second traitement sur le même périmètre. Actualiser les deux sources dans Tableau après validation du traitement et de la publication PostgreSQL.
+
+### Publication réelle et test de non-republication
+
+Le lanceur `scripts/publish_real_publication.py` publie un lot explicitement sélectionné avec `--batch-id` et `--execute`. La publication Kafka est distincte du traitement Spark/Gold/PostgreSQL.
+
+Exemple utilisé pour tester la relance du lot déjà `published` de cette session :
+
+```bash
+.venv/bin/python scripts/publish_real_publication.py \
+  data/source_checks/active-real-ldCSXV \
+  --batch-id 45b99e449061724d8ff028ba8451cfd670741eb65d20c2e4c40988a429b2f5d1 \
+  --execute
+```
+
+Dans l’état validé de ce registre, la relance retourne `published_now: false`, `status: published` et `event_count: 100`. L’offset de fin Kafka est resté à `210` avant et après la relance. La présence d’un chemin de reçu ou de log dans la réponse ne signifie pas qu’un nouvel envoi a eu lieu.
+
+Cet exemple documente un test de non-republication, pas une préparation ou une première publication depuis un clone. Ne pas recréer le registre pour forcer un envoi, supprimer les reçus ou appliquer cette relance aveuglément à un lot en échec, `publishing` ou `uncertain`. Les trois lots `pending` ne font pas partie de ce test.
 
 ### Simulation à la demande
 
@@ -134,13 +180,14 @@ Le topic de simulation est partagé : un événement envoyé pendant le test act
 
 - Les contrôles Silver bloquent avant Gold : doublons, champs requis retenus, conversion secondes/minutes et complétude de `route_id`, `stop_id`, `line_name`, `stop_name`. La complétude ne garantit pas l’exactitude sémantique des noms GTFS ; une anomalie d’enrichissement n’est pas automatiquement déplacée vers les rejets.
 - Le cycle Gold contrôle et agrège une même version Silver avec `versionAsOf`, puis recalcule les cumuls de cet instantané. Les deux écritures Delta et PostgreSQL ne constituent pas une transaction globale ; les échecs partiels restent à tester.
-- La version publiée est mémorisée uniquement pendant l’exécution : Silver inchangée est ignorée, mais le premier cycle est rejoué après redémarrage. Les erreurs arrêtent le lanceur ; les retries/backoffs ne sont pas encore implémentés.
+- Pour le cycle Gold/PostgreSQL, la version Silver publiée est mémorisée uniquement pendant l’exécution : Silver inchangée est ignorée, mais le premier cycle est rejoué après redémarrage. Ce mécanisme est distinct du registre local de publication Kafka. Les erreurs arrêtent le lanceur ; les retries/backoffs du cycle Gold restent à implémenter et tester.
 - La supervision détecte les sorties de processus, pas encore une requête bloquée, une source stagnante ou une fraîcheur insuffisante. Un arrêt normal ne garantit pas le vidage complet du pipeline.
+- Pour la publication Kafka réelle, le reçu de 100 accusés et le refus de republier un lot déjà `published` ont été vérifiés. La reprise après envoi partiel et les situations `publishing`/`uncertain` restent à valider ; un échec ne justifie pas de remettre aveuglément le lot à `pending` ou d’effacer son registre.
 - Les checkpoints et upserts couvrent les scénarios testés, sans garantie universelle d’exactly-once. La déduplication Silver est bornée par watermark.
 - Le publisher reste limité à 10 000 agrégats par table. Les lignes disparues de Gold ne sont pas automatiquement supprimées de PostgreSQL.
 - Le coût d’un recalcul complet n’a été observé que sur quelques événements. Le Mac de test dispose de 8 Go de RAM ; une pression mémoire jaune et un recours important au swap ont été observés avec les trois jobs et d’autres applications ouvertes. Aucun benchmark de charge soutenue n’est revendiqué.
 - Les dashboards Tableau réels n’ont pas été basculés sur le schéma de test. Metabase reste historique et présent dans Compose. Les alertes, la DLQ Kafka et Airflow ne sont pas implémentés.
-- Ne pas versionner `.env`, secrets, données Delta, checkpoints, logs ou exports volumineux. Les dossiers locaux `active-stream-*`, `trigger-regression-*` et les verrous des lanceurs doivent être ignorés ; conserver les données nécessaires à la reprise sur le disque.
+- Ne pas versionner `.env`, secrets, données Delta, checkpoints, logs, reçus de publication ou exports volumineux. Les données et preuves locales de `data/source_checks/` ne sont pas nécessaires au clone du code. Les dossiers locaux `active-stream-*`, `trigger-regression-*` et les verrous des lanceurs doivent être ignorés ; conserver les données nécessaires à la reprise sur le disque.
 
 ## Documentation
 
@@ -151,7 +198,7 @@ Le topic de simulation est partagé : un événement envoyé pendant le test act
 
 ## Avancement
 
-### Réalisé
+### Socle déjà validé
 
 - [x] Infrastructure locale Kafka, Kafka UI et PostgreSQL avec Docker Compose.
 - [x] Producteur Java et simulateur Python, avec cas invalides.
@@ -176,29 +223,93 @@ Le topic de simulation est partagé : un événement envoyé pendant le test act
 - [x] Lanceur Gold périodique, version inchangée ignorée et arrêt coopératif corrigé/testé.
 - [x] Supervision commune des trois jobs, logs séparés, verrous et scénarios d’arrêt vérifiés.
 - [x] Propagation automatique d’une nouvelle observation simulée jusqu’à PostgreSQL : passage de 3 à 4.
+- [x] Publication réelle d’un lot de 100 observations avec 100 accusés Kafka, offsets `110` à `209`.
+- [x] Refus de republier le même lot déjà terminé : `published_now: false` et offset de fin inchangé à `210`.
+- [x] Capture analytique avant traitement du nouveau lot : 110 observations Silver, 0 rejet et 7/84 agrégats PostgreSQL.
 
-### À faire — V1 quasi-temps réel
+### Clôture V1 — six jalons bornés
 
-- [ ] Définir le volume et la cadence de collecte réelle après examen de la source, de ses contraintes et des ressources locales.
-- [ ] Automatiser la collecte des instantanés SNCF, d’abord sans publication Kafka, avec gestion des erreurs et références compatibles.
-- [ ] Reconnaître les instantanés inchangés et éviter leur republication ; tester la reprise d’une publication partielle.
-- [ ] Adapter et valider le mode actif sur le parcours réel sans casser le mode à la demande ni effacer l’historique.
-- [ ] Ajouter et tester les retries/backoffs et la récupération après échec partiel du cycle Gold/PostgreSQL.
-- [ ] Mesurer fraîcheur source → PostgreSQL et délai collecteur → PostgreSQL ; détecter source stagnante et absence de progression.
-- [ ] Tester les checkpoints réels, les interruptions en cours de traitement et les limites d’arrêt/vidage du pipeline actif.
-- [ ] Mesurer le coût sur une session plus longue et un volume accru ; adapter les ressources ou la stratégie de recalcul si nécessaire.
-- [ ] Démontrer plusieurs instantanés SNCF récents traités sans commande intermédiaire, puis vérifier Tableau après actualisation manuelle.
-- [ ] Consolider les procédures actives, les limites et les preuves dans le runbook, le contrat et l’architecture.
-- [ ] Revalider la suite complète après la dernière extension du superviseur et vérifier la CI du commit retenu.
-- [ ] Vérifier le parcours réel et l’initialisation du mode actif depuis un clone isolé ; archiver les preuves sans secrets.
-- [ ] Confiner les ports à l’interface locale et créer un compte BI en lecture seule.
-- [ ] Vérifier le classeur Tableau, sa réouverture et l’absence de secrets avant versionnement.
-- [ ] Actualiser les captures du README, vérifier le guide Tableau et enregistrer une démonstration propre.
+Les composants du socle ci-dessus sont acquis : ils ne sont pas à reconstruire. Cette liste organise le reste à faire ; elle distingue les tâches d’intégration, les validations et les finitions. Une vérification peut confirmer un point déjà réalisé sans nécessiter de nouveau développement. Les sous-points ne sont pas de nouveaux jalons.
+
+Ordre de progression : nouveau lot de bout en bout → session réelle automatique → mesures et reprise → clôture technique et présentation. Aucun pourcentage d’avancement n’est déduit du nombre de cases.
+
+#### Jalon 1 — Valider le nouveau lot réel jusqu’à PostgreSQL
+
+- [x] Publier 100 observations dans Kafka et vérifier les 100 accusés de réception.
+- [x] Vérifier la non-republication du lot déjà terminé.
+- [x] Capturer l’état analytique avant traitement : 110 observations, 0 rejet, 7/84 agrégats.
+- [ ] Identifier le référentiel GTFS utilisé pour normaliser le nouveau lot.
+- [ ] Exécuter le parcours réel en `available_now`, avec les checkpoints existants.
+- [ ] Contrôler les nouvelles observations Silver : présence, déduplication, enrichissement et rejets éventuels.
+- [ ] Vérifier la conservation des 110 observations historiques et la publication des agrégats dans PostgreSQL, puis comparer les captures avant/après.
+
+Critère de fin : le nouveau lot est validé jusqu’à PostgreSQL, sans perte d’historique. Ne pas confondre le nombre d’agrégats avec le nombre d’observations.
+
+#### Jalon 2 — Raccorder et valider la session réelle automatique
+
+Réutiliser le collecteur, la normalisation, le registre et les composants actifs existants ; ne pas reconstruire le mode simulé déjà validé.
+
+- [ ] Finaliser la cadence et le volume de collecte selon les contraintes de la source et du Mac.
+- [ ] Raccorder et valider collecte → normalisation → publication Kafka sans commande manuelle entre les instantanés.
+- [ ] Vérifier la gestion des instantanés inchangés et l’utilisation du registre de publication dans cet enchaînement.
+- [ ] Adapter au périmètre réel la supervision Bronze/Silver et le cycle Gold/PostgreSQL, avec les protections de chemins et de schémas.
+- [ ] Préserver le mode à la demande et l’isolation entre simulation et réel.
+- [ ] Démontrer le traitement automatique de plusieurs instantanés récents jusqu’à PostgreSQL.
+
+Critère de fin : après lancement, la session réelle progresse sans déclenchement manuel de chaque étape. Un service permanent 24 h/24 et un rafraîchissement automatique de Tableau ne sont pas exigés.
+
+#### Jalon 3 — Mesurer la fraîcheur et suivre la progression
+
+- [ ] Mesurer séparément la fraîcheur source → PostgreSQL et le délai collecteur → PostgreSQL.
+- [ ] Conserver les horodatages et informations de progression nécessaires : dernière collecte, publication Kafka, traitement et publication analytique.
+- [ ] Distinguer une source inchangée d’un pipeline bloqué et définir des seuils simples pour signaler l’absence de progression.
+- [ ] Observer une session plus longue et un volume supérieur aux petits essais : mémoire, swap, durée des cycles et retard éventuel.
+
+Critère de fin : présenter des délais mesurés et les limites observées, sans confondre durée d’un cycle Gold et latence de bout en bout. Définir un objectif de fraîcheur adapté aux mesures, sans promettre un délai non démontré.
+
+#### Jalon 4 — Valider la reprise réelle active et les pannes retenues
+
+La reprise historique à la demande et les scénarios d’arrêt du superviseur simulé sont acquis. Les validations restantes concernent le parcours réel actif et les nouveaux composants.
+
+- [ ] Tester l’arrêt et le redémarrage réels avec les mêmes checkpoints et le même registre ; contrôler doublons et conservation de l’historique.
+- [ ] Tester une interruption de publication Kafka et documenter le diagnostic des états `publishing`/`uncertain`, sans renvoi aveugle.
+- [ ] Tester un échec partiel du cycle Gold/PostgreSQL et sa récupération.
+- [ ] Ajouter et tester les retries/backoffs prévus uniquement sur les opérations dont la relance est sûre ; ne pas assimiler un envoi Kafka incertain à un simple retry.
+- [ ] Documenter les limites de l’arrêt et du vidage des données en attente.
+
+Critère de fin : les scénarios retenus ont un comportement testé et une procédure de récupération explicite. Ne pas promettre un exactly-once universel ni une récupération automatique de toutes les pannes.
+
+#### Jalon 5 — Valider la version finale, la reproductibilité et la sécurité
+
+- [ ] Exécuter les suites complètes Java/Python et vérifier la CI du commit retenu.
+- [ ] Confirmer l’absence de régression des parcours simulation et réel à la demande.
+- [ ] Vérifier, depuis un clone isolé, l’installation et l’initialisation des parcours documentés sans dépendre des dossiers temporaires de développement.
+- [ ] Vérifier et, si nécessaire, confiner les ports à l’interface locale.
+- [ ] Créer et utiliser un compte PostgreSQL en lecture seule pour Tableau.
+- [ ] Vérifier l’absence de secrets dans Git, les logs partagés et le classeur Tableau.
 - [ ] Retirer Metabase et ses références inutiles sans supprimer les volumes métier.
-- [ ] Compléter documentation et qualité de code ; acter les contrôles du contrat, alertes et DLQ retenus pour la clôture.
-- [ ] Ajouter les analyses temporelles seulement après validation d’un historique suffisant, sans en faire à elles seules une preuve de streaming.
 
-### À faire — V2 et évolutions
+Critère de fin : une version testée et reproductible, avec les services locaux et identifiants correctement protégés. Un point à vérifier n’est pas automatiquement un point à réimplémenter.
 
-- [ ] Ajouter Airflow pour planifier les références GTFS, les contrôles et les recalculs/publications batch.
-- [ ] Documenter une éventuelle trajectoire Azure, optionnelle et non bloquante.
+#### Jalon 6 — Finaliser Tableau, la documentation et la démonstration
+
+Les deux dashboards existent déjà : les vérifier et les présenter, sans les reconstruire.
+
+- [ ] Après publication PostgreSQL, actualiser les deux sources Tableau et vérifier périodes, filtres et indicateurs sur le nouveau périmètre par comparaison avec PostgreSQL.
+- [ ] Vérifier la sauvegarde et la réouverture du classeur sans secrets.
+- [ ] Confirmer ou actualiser les captures propres des dashboards.
+- [ ] Enregistrer une courte démonstration du parcours réel automatique, puis de l’actualisation manuelle Tableau.
+- [ ] Consolider README, runbook, architecture, contrat de données et contexte : résultats, limites, commandes de démarrage, d’arrêt et de reprise.
+- [ ] Acter explicitement le périmètre de clôture pour les contrôles additionnels, alertes et DLQ : fonctionnalité retenue ou évolution reportée, sans ajout implicite de nouvelles exigences.
+
+Critère de fin : une autre personne peut comprendre le projet, reproduire le parcours documenté et distinguer les résultats démontrés des fonctionnalités envisagées.
+
+### Hors du chemin de clôture — V2 et évolutions
+
+Ces éléments ne doivent pas allonger automatiquement les six jalons :
+
+- [ ] Airflow en V2 pour planifier références GTFS, contrôles, recalculs et publications batch.
+- [ ] Trajectoire Azure optionnelle, sans dépendance cloud pour terminer la V1 locale.
+- [ ] Analyses temporelles, heatmaps, distributions et percentiles après validation d’un historique et d’une granularité adaptés.
+- [ ] Topics `validated`, alertes de service et DLQ si retenus explicitement comme extensions.
+- [ ] Haute disponibilité, fonctionnement permanent et tests de charge poussés : hors de la démonstration locale visée.

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-REAL_TOPIC = "sncf.tripupdates.real.raw"
+REAL_TOPIC = "sncf.trip_updates.real.raw"
 MAX_EVENTS = 20000
 STATUSES = {"pending", "publishing", "published", "uncertain"}
 

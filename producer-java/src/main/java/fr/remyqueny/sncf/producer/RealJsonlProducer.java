@@ -38,7 +38,7 @@ public final class RealJsonlProducer {
     private static final Logger LOGGER =
             LoggerFactory.getLogger(RealJsonlProducer.class);
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final String TOPIC = "sncf.tripupdates.real.raw";
+    private static final String TOPIC = "sncf.trip_updates.real.raw";
     private static final int MAX_EVENTS = 20000;
 
     private RealJsonlProducer() {
