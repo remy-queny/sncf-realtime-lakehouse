@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.net.URI;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class GtfsRealtimeCollectorApplication {
 
@@ -11,6 +12,8 @@ public final class GtfsRealtimeCollectorApplication {
             "Usage : GtfsRealtimeCollectorApplication "
                     + "<url-source> <dossier-collecte> "
                     + "<pause-secondes> <nombre-cycles>";
+
+    private static final long SHUTDOWN_WAIT_MILLISECONDS = 30000;
 
     private GtfsRealtimeCollectorApplication() {
     }
@@ -35,15 +38,72 @@ public final class GtfsRealtimeCollectorApplication {
     }
 
     public static void main(String[] args) {
-        int code = run(
-                args,
-                new GtfsRealtimeCollectionLoop()::run,
-                System.out,
-                System.err
+        Runtime runtime = Runtime.getRuntime();
+        Thread collectorThread = Thread.currentThread();
+        AtomicBoolean shutdownRequested = new AtomicBoolean();
+
+        Thread shutdownHook = new Thread(
+                () -> stopCollector(
+                        collectorThread,
+                        shutdownRequested,
+                        System.err,
+                        SHUTDOWN_WAIT_MILLISECONDS
+                ),
+                "sncf-collector-shutdown"
         );
 
-        if (code != 0) {
+        runtime.addShutdownHook(shutdownHook);
+
+        int code;
+
+        try {
+            code = run(
+                    args,
+                    new GtfsRealtimeCollectionLoop()::run,
+                    System.out,
+                    System.err
+            );
+        } finally {
+            try {
+                runtime.removeShutdownHook(shutdownHook);
+            } catch (IllegalStateException exception) {
+                // Shutdown is already in progress; its hook owns termination.
+                shutdownRequested.set(true);
+            }
+        }
+
+        if (code != 0 && !shutdownRequested.get()) {
             System.exit(code);
+        }
+    }
+
+    static void stopCollector(
+            Thread collectorThread,
+            AtomicBoolean shutdownRequested,
+            PrintStream err,
+            long waitMilliseconds
+    ) {
+        if (waitMilliseconds <= 0) {
+            throw new IllegalArgumentException(
+                    "Le délai d'arrêt doit être strictement positif."
+            );
+        }
+
+        shutdownRequested.set(true);
+        err.println("status=shutdown_requested");
+        collectorThread.interrupt();
+
+        try {
+            collectorThread.join(waitMilliseconds);
+
+            if (collectorThread.isAlive()) {
+                err.println("status=shutdown_timeout");
+            } else {
+                err.println("status=shutdown_finished");
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            err.println("status=shutdown_wait_interrupted");
         }
     }
 
@@ -59,9 +119,7 @@ public final class GtfsRealtimeCollectorApplication {
                     "La pause s'applique après chaque cycle, "
                             + "sauf le dernier."
             );
-            out.println(
-                    "Utiliser un dossier dédié à une seule source."
-            );
+            out.println("Utiliser un dossier dédié à une seule source.");
             out.println(
                     "Collecte brute uniquement : aucun export JSONL, "
                             + "envoi Kafka ou traitement Spark."
@@ -105,7 +163,6 @@ public final class GtfsRealtimeCollectorApplication {
                             + " exception=" + exception.getClass().getSimpleName()
                             + " message=" + exception.getMessage()
             );
-
             return 1;
         }
     }
@@ -149,9 +206,7 @@ public final class GtfsRealtimeCollectorApplication {
 
         if (intervalSeconds <= 0
                 || intervalSeconds > Long.MAX_VALUE / 1000) {
-            throw new IllegalArgumentException(
-                    "Pause invalide."
-            );
+            throw new IllegalArgumentException("Pause invalide.");
         }
 
         if (maxCycles <= 0) {
