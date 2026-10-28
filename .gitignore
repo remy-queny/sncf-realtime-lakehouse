@@ -169,3 +169,6 @@ docker-volumes/
 
 # Artefacts locaux des tests SIGINT du collecteur SNCF
 /data/validation/collector-signals-*/
+
+# Archives et registres locaux des collectes SNCF périodiques
+/data/source_checks/periodic-*/
