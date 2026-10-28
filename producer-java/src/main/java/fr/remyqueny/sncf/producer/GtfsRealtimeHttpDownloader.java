@@ -12,8 +12,11 @@ import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HexFormat;
 
 public final class GtfsRealtimeHttpDownloader {
 
@@ -32,7 +35,8 @@ public final class GtfsRealtimeHttpDownloader {
             long sizeBytes,
             String feedVersion,
             int entityCount,
-            Instant publishedAt
+            Instant publishedAt,
+            String sha256
     ) {
     }
 
@@ -110,6 +114,8 @@ public final class GtfsRealtimeHttpDownloader {
                     feed.getHeader().getTimestamp()
             );
 
+            String fingerprint = sha256(temporary);
+
             Files.move(temporary, output);
 
             return new DownloadResult(
@@ -118,11 +124,36 @@ public final class GtfsRealtimeHttpDownloader {
                     size,
                     feed.getHeader().getGtfsRealtimeVersion(),
                     feed.getEntityCount(),
-                    publishedAt
+                    publishedAt,
+                    fingerprint
             );
         } finally {
             Files.deleteIfExists(temporary);
         }
+    }
+
+    private static String sha256(Path file) throws IOException {
+        MessageDigest digest;
+
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException(
+                    "SHA-256 indisponible dans cet environnement Java.",
+                    exception
+            );
+        }
+
+        try (InputStream input = Files.newInputStream(file)) {
+            byte[] buffer = new byte[8192];
+            int count;
+
+            while ((count = input.read(buffer)) != -1) {
+                digest.update(buffer, 0, count);
+            }
+        }
+
+        return HexFormat.of().formatHex(digest.digest());
     }
 
     public static void main(String[] args)
@@ -130,7 +161,7 @@ public final class GtfsRealtimeHttpDownloader {
 
         if (args.length != 1) {
             throw new IllegalArgumentException(
-                    "Usage : GtfsRealtimeHttpDownloader <nouveau_fichier.pb>"
+                    "Usage : GtfsRealtimeHttpDownloader nouveau_fichier.pb"
             );
         }
 
@@ -152,6 +183,7 @@ public final class GtfsRealtimeHttpDownloader {
         System.out.println(
                 "Timestamp de publication UTC : " + result.publishedAt()
         );
+        System.out.println("SHA-256 : " + result.sha256());
         System.out.println("Fichier : " + result.file());
         System.out.println("Téléchargement validé, aucun envoi Kafka.");
     }

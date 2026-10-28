@@ -20,10 +20,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Instant;
+import java.util.HexFormat;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -43,6 +46,7 @@ class GtfsRealtimeHttpDownloaderTest {
                 new InetSocketAddress("127.0.0.1", 0),
                 0
         );
+
         server.start();
     }
 
@@ -58,7 +62,7 @@ class GtfsRealtimeHttpDownloaderTest {
         byte[] body = feed(true);
         respond(200, body);
 
-        Path destination = directory.resolve("trip_updates.pb");
+        Path destination = directory.resolve("tripupdates.pb");
 
         var result = GtfsRealtimeHttpDownloader.download(
                 source(),
@@ -70,6 +74,7 @@ class GtfsRealtimeHttpDownloaderTest {
         assertEquals("1.0", result.feedVersion());
         assertEquals(1, result.entityCount());
         assertEquals(PUBLISHED_AT, result.publishedAt());
+
         assertEquals(
                 destination.toAbsolutePath().normalize(),
                 result.file()
@@ -90,7 +95,7 @@ class GtfsRealtimeHttpDownloaderTest {
                 IOException.class,
                 () -> GtfsRealtimeHttpDownloader.download(
                         source(),
-                        directory.resolve("trip_updates.pb")
+                        directory.resolve("tripupdates.pb")
                 )
         );
 
@@ -106,7 +111,7 @@ class GtfsRealtimeHttpDownloaderTest {
                 IOException.class,
                 () -> GtfsRealtimeHttpDownloader.download(
                         source(),
-                        directory.resolve("trip_updates.pb")
+                        directory.resolve("tripupdates.pb")
                 )
         );
 
@@ -121,7 +126,7 @@ class GtfsRealtimeHttpDownloaderTest {
                 IOException.class,
                 () -> GtfsRealtimeHttpDownloader.download(
                         source(),
-                        directory.resolve("trip_updates.pb")
+                        directory.resolve("tripupdates.pb")
                 )
         );
 
@@ -136,7 +141,7 @@ class GtfsRealtimeHttpDownloaderTest {
                 IOException.class,
                 () -> GtfsRealtimeHttpDownloader.download(
                         source(),
-                        directory.resolve("trip_updates.pb")
+                        directory.resolve("tripupdates.pb")
                 )
         );
 
@@ -146,8 +151,10 @@ class GtfsRealtimeHttpDownloaderTest {
 
     @Test
     void shouldNotOverwriteExistingFile() throws Exception {
-        Path destination = directory.resolve("trip_updates.pb");
-        byte[] original = "existing-file".getBytes(StandardCharsets.UTF_8);
+        Path destination = directory.resolve("tripupdates.pb");
+        byte[] original = "existing-file".getBytes(
+                StandardCharsets.UTF_8
+        );
 
         Files.write(destination, original);
 
@@ -161,6 +168,79 @@ class GtfsRealtimeHttpDownloaderTest {
 
         assertArrayEquals(original, Files.readAllBytes(destination));
         assertFileCount(1);
+    }
+
+    @Test
+    void shouldReturnSha256OfDownloadedBytes() throws Exception {
+        byte[] body = feed(true);
+        respond(200, body);
+
+        var result = GtfsRealtimeHttpDownloader.download(
+                source(),
+                directory.resolve("fingerprint.pb")
+        );
+
+        String expected = HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(body)
+        );
+
+        assertEquals(expected, result.sha256());
+        assertEquals(64, result.sha256().length());
+        assertFileCount(1);
+    }
+
+    @Test
+    void shouldKeepFingerprintForIdenticalSnapshots() throws Exception {
+        respond(200, feed(true));
+
+        var first = GtfsRealtimeHttpDownloader.download(
+                source(),
+                directory.resolve("first.pb")
+        );
+
+        var second = GtfsRealtimeHttpDownloader.download(
+                source(),
+                directory.resolve("second.pb")
+        );
+
+        assertEquals(first.sha256(), second.sha256());
+        assertEquals(first.publishedAt(), second.publishedAt());
+        assertFileCount(2);
+    }
+
+    @Test
+    void shouldChangeFingerprintWhenContentChangesWithSameTimestamp()
+            throws Exception {
+
+        FeedMessage original = FeedMessage.parseFrom(feed(true));
+
+        FeedMessage changed = original.toBuilder()
+                .setEntity(
+                        0,
+                        original.getEntity(0).toBuilder()
+                                .setId("another-entity")
+                                .build()
+                )
+                .build();
+
+        respond(200, original.toByteArray());
+
+        var first = GtfsRealtimeHttpDownloader.download(
+                source(),
+                directory.resolve("original.pb")
+        );
+
+        server.removeContext("/feed");
+        respond(200, changed.toByteArray());
+
+        var second = GtfsRealtimeHttpDownloader.download(
+                source(),
+                directory.resolve("changed.pb")
+        );
+
+        assertEquals(first.publishedAt(), second.publishedAt());
+        assertNotEquals(first.sha256(), second.sha256());
+        assertFileCount(2);
     }
 
     private URI source() {
@@ -206,8 +286,11 @@ class GtfsRealtimeHttpDownloaderTest {
                                 .setTripUpdate(
                                         TripUpdate.newBuilder()
                                                 .setTrip(
-                                                        TripDescriptor.newBuilder()
-                                                                .setTripId("trip-test")
+                                                        TripDescriptor
+                                                                .newBuilder()
+                                                                .setTripId(
+                                                                        "trip-test"
+                                                                )
                                                 )
                                 )
                 )
