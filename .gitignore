@@ -166,3 +166,6 @@ docker-volumes/
 # Local simulation supervisor lock
 /data/validation/.active-simulation.lock
 /data/validation/.active-gold.lock
+
+# Artefacts locaux des tests SIGINT du collecteur SNCF
+/data/validation/collector-signals-*/
