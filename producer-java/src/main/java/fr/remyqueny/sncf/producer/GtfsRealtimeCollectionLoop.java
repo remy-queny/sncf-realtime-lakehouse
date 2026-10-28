@@ -16,7 +16,7 @@ public final class GtfsRealtimeCollectionLoop {
 
     public GtfsRealtimeCollectionLoop() {
         this(
-                new GtfsRealtimeSnapshotCollector()::collect,
+                new GtfsRealtimeRetryingCollector()::collect,
                 Thread::sleep,
                 result -> System.out.println(
                         "status="

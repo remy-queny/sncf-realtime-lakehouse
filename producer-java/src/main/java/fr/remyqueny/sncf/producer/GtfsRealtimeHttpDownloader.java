@@ -1,5 +1,6 @@
 package fr.remyqueny.sncf.producer;
 
+import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.transit.realtime.GtfsRealtime.FeedMessage;
 
 import java.io.IOException;
@@ -14,6 +15,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
@@ -82,16 +84,18 @@ public final class GtfsRealtimeHttpDownloader {
             );
 
             if (response.statusCode() != 200) {
-                throw new IOException(
-                        "Téléchargement refusé : HTTP "
-                                + response.statusCode()
+                throw GtfsRealtimeDownloadException.httpResponse(
+                        response.statusCode(),
+                        response.headers()
+                                .firstValue("Retry-After")
+                                .orElse(null)
                 );
             }
 
             long size = Files.size(temporary);
 
             if (size == 0 || size > MAX_FILE_BYTES) {
-                throw new IOException(
+                throw GtfsRealtimeDownloadException.invalidFeed(
                         "Taille du fichier non acceptée : "
                                 + size + " octets"
                 );
@@ -101,18 +105,37 @@ public final class GtfsRealtimeHttpDownloader {
 
             try (InputStream input = Files.newInputStream(temporary)) {
                 feed = FeedMessage.parseFrom(input);
+            } catch (InvalidProtocolBufferException exception) {
+                // A local read failure must remain a plain I/O failure.
+                if (exception.unwrapIOException() != exception) {
+                    throw exception.unwrapIOException();
+                }
+
+                throw GtfsRealtimeDownloadException.invalidFeed(
+                        "Flux Protobuf invalide.",
+                        exception
+                );
             }
 
             if (!feed.getHeader().hasTimestamp()
                     || feed.getHeader().getTimestamp() <= 0) {
-                throw new IOException(
+                throw GtfsRealtimeDownloadException.invalidFeed(
                         "Timestamp de publication absent ou invalide"
                 );
             }
 
-            Instant publishedAt = Instant.ofEpochSecond(
-                    feed.getHeader().getTimestamp()
-            );
+            Instant publishedAt;
+
+            try {
+                publishedAt = Instant.ofEpochSecond(
+                        feed.getHeader().getTimestamp()
+                );
+            } catch (DateTimeException exception) {
+                throw GtfsRealtimeDownloadException.invalidFeed(
+                        "Timestamp de publication hors limites.",
+                        exception
+                );
+            }
 
             String fingerprint = sha256(temporary);
 
