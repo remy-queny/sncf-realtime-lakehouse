@@ -2,7 +2,7 @@
 
 Projet local de data engineering pour normaliser des observations SNCF GTFS-RT, les traiter dans un lakehouse Delta et restituer des indicateurs de retard dans Tableau.
 
-> État au 28 octobre 2026 : parcours à la demande validé sur 110 observations réelles ; mode actif supervisé démontré en simulation jusqu’à PostgreSQL sur 4 observations. Une publication réelle supplémentaire de 100 observations a été acquittée par Kafka, puis sa non-republication a été vérifiée. Ce nouveau lot n’a pas encore été traité par Spark ni publié dans PostgreSQL/Tableau. La suite est organisée en six jalons de clôture ; le parcours réel actif complet reste à valider. Airflow reste prévu en V2.
+> État au 28 octobre 2026 : jalon 1 terminé. Le parcours réel à la demande est validé sur 210 observations jusqu’à PostgreSQL, avec conservation exacte des 110 observations historiques et ajout des 100 nouveaux identifiants attendus, sans doublon ni rejet. Tableau reste validé sur le périmètre historique de 110 observations ; son actualisation sur le nouveau périmètre n’a pas encore été vérifiée. Le mode actif supervisé est démontré en simulation sur 4 observations. Prochaine étape : jalon 2, raccordement et validation de la session réelle automatique. Airflow reste en V2.
 
 ## Architecture
 
@@ -37,24 +37,24 @@ Les captures concernent le parcours réel historique, pas le test actif de simul
 
 ## Résultats validés
 
-### Données SNCF réelles — à la demande
+### Historique réel — 110 observations validées jusqu’à Tableau
 
 | Date d’observation | Observations | Observations > 5 min | Part > 5 min |
 |---|---:|---:|---:|
 | 8 octobre 2026 | 10 | 0 | 0 % |
 | 15 octobre 2026 | 100 | 39 | 39 % |
-| Total | 110 | 39 | 35,45 % |
+| Total historique | 110 | 39 | 35,45 % |
 
-- PostgreSQL : 7 agrégats ligne/fenêtre et 84 agrégats arrêt/jour ; chaque table représente les mêmes 110 observations.
+- État historique PostgreSQL avant le lot du 28 octobre : 7 agrégats ligne/fenêtre et 84 agrégats arrêt/jour ; chaque table représentait les mêmes 110 observations.
 - Tableau sur les deux lots : moyenne pondérée affichée de 7,68 minutes et maximum de 45 minutes.
 - Reprise réelle du 20 octobre : contenu Silver/PostgreSQL identique avant et après une relance sans nouvel envoi Kafka ; 110 observations Silver et 0 rejet dans ce contrôle.
 - Qualité du 27 octobre : 14 cas ciblés d’enrichissement réussis, puis suite Python et inspection réelle confirmées sans erreur.
 
-Le premier instantané a produit 16 978 événements normalisés/exportés ; seuls 10 de ce lot, puis 100 d’un second lot, ont été validés de bout en bout. L’échantillon ne représente pas la ponctualité globale du réseau. Les compteurs portent sur des observations, pas sur des trains uniques ; le seuil est strictement supérieur à cinq minutes.
+Le premier instantané a produit 16 978 événements normalisés/exportés ; 10 de ce lot, puis 100 d’un second lot, composent le périmètre historique validé jusqu’à Tableau. Le lot supplémentaire du 28 octobre porte désormais le total validé jusqu’à PostgreSQL à 210 observations. Les indicateurs métier du tableau ci-dessus concernent uniquement les 110 observations historiques ; aucun taux de retard, moyenne ou maximum actualisé sur 210 observations n’est déduit de cette extension. L’échantillon ne représente pas la ponctualité globale du réseau. Les compteurs portent sur des observations, pas sur des trains uniques ; le seuil est strictement supérieur à cinq minutes.
 
-### Publication réelle contrôlée — 28 octobre 2026
+### Publication et traitement réels — 28 octobre 2026
 
-Cette validation porte sur la publication Kafka et son registre local, pas encore sur le traitement analytique du nouveau lot.
+Cette validation couvre la publication Kafka contrôlée, la non-republication du lot terminé, puis son traitement à la demande jusqu’à PostgreSQL. Elle ne démontre pas encore une session réelle automatique sur plusieurs instantanés.
 
 | Contrôle | Résultat observé |
 |---|---|
@@ -66,20 +66,30 @@ Cette validation porte sur la publication Kafka et son registre local, pas encor
 | Relance du même lot déjà publié | `published_now: false`, statut conservé à `published` |
 | Contrôle broker avant/après cette relance | Offset de fin inchangé à `210`, comparaison des captures sans différence |
 
-Le test valide l’absence de republication du lot déjà terminé dans ce scénario. Il ne démontre ni une garantie générale d’exactly-once ni la récupération après une publication partielle ou un résultat incertain. Les 300 observations des trois autres lots restent en attente ; leur publication n’est pas un prérequis au contrôle du premier lot de bout en bout.
+Le test valide l’absence de republication du lot déjà terminé dans ce scénario. Il ne démontre ni une garantie générale d’exactly-once ni la récupération après une publication partielle ou un résultat incertain. Les 300 observations des trois autres lots restent en attente ; elles ne sont pas incluses dans les 210 observations analytiques et leur publication n’est pas nécessaire pour clôturer le jalon 1.
 
-Une capture analytique a été réalisée avant de traiter le nouveau lot :
+Le référentiel du lot a été identifié dans `data/reference/real/periodic-21SubU`. L’empreinte SHA-256 de son manifeste correspondait à celle conservée dans les métadonnées de publication : `370b8d4b694814eebba3ba07262c1be8f2eec65b7cced8733d333b50e57e8741`.
 
-| Élément capturé | État avant traitement |
-|---|---:|
-| Silver `trip_delays` | 110 observations |
-| Silver `rejected_events` | 0 rejet |
-| `sncf_real.gold_delay_by_line_15min` | 7 agrégats |
-| `sncf_real.gold_station_delay_daily` | 84 agrégats |
+Le traitement a été exécuté avec `scripts/run_real_pipeline.sh`, en mode `available_now`, avec les checkpoints réels existants, sans nouvel envoi Kafka. Les captures analytiques avant/après ont donné :
 
-La validation analytique de bout en bout reste limitée aux 110 observations historiques. Les 100 observations supplémentaires acquittées par Kafka ne portent pas encore ce total à 210 dans Silver, PostgreSQL ou Tableau. Les nombres d’agrégats ne sont pas des nombres d’observations.
+| Élément capturé | Avant | Après |
+|---|---:|---:|
+| Silver `trip_delays` | 110 observations | 210 observations |
+| Silver `rejected_events` | 0 rejet | 0 rejet |
+| `sncf_real.gold_delay_by_line_15min` | 7 agrégats | 13 agrégats |
+| `sncf_real.gold_station_delay_daily` | 84 agrégats | 162 agrégats |
 
-Preuves locales de cette session, sous `data/source_checks/active-real-ldCSXV/` : registre et reçus dans `publication/`, contrôles d’offset dans `publication/check-csPBuD/`, capture analytique dans `serving-check-FP8X7F/before.json`. Ces dossiers ne sont pas fournis par Git et ne constituent pas une procédure d’initialisation depuis un clone.
+Le contrôle final a confirmé :
+
+- Les 110 observations historiques sont conservées, avec un contenu inchangé.
+- Les nouveaux identifiants correspondent exactement aux 100 observations attendues du JSONL source, dont l’empreinte a été vérifiée.
+- Silver contient 210 observations uniques et aucun rejet.
+- Les 13 agrégats ligne/fenêtre représentent 210 observations.
+- Les 162 agrégats arrêt/jour représentent les mêmes 210 observations ; ne pas additionner les volumes des deux tables.
+
+Le jalon 1 est terminé. La validation jusqu’à PostgreSQL porte sur 210 observations ; la validation Tableau reste sur 110 tant que l’actualisation et les contrôles du nouveau périmètre n’ont pas été effectués.
+
+Preuves locales de cette session, sous `data/source_checks/active-real-ldCSXV/` : registre et reçus dans `publication/`, contrôles d’offset dans `publication/check-csPBuD/`, captures analytiques `before.json` et `after.json` dans `serving-check-FP8X7F/`, ainsi que le journal du traitement. Ces dossiers ne sont pas fournis par Git et ne constituent pas une procédure d’initialisation depuis un clone.
 
 ### Simulation — mode actif supervisé
 
@@ -93,7 +103,7 @@ Preuves locales de cette session, sous `data/source_checks/active-real-ldCSXV/` 
 
 Ces essais portent sur un très petit volume simulé, pas sur une collecte SNCF continue. Les durées affichées par les cycles excluent le démarrage de Spark et ne mesurent pas la latence Kafka/source → PostgreSQL.
 
-Historique des résultats de tests documentés : 118 tests Python réussis sur une suite complète, puis 25 tests ciblés après ajout des six tests de supervision commune. Ces compteurs ne constituent pas un nouveau relevé global au 28 octobre. Les contrôles Kafka ci-dessus sont des validations d’intégration distinctes et ne permettent pas de déduire un nouveau total de tests. La suite complète finale et la CI du commit retenu restent à confirmer.
+Historique des résultats de tests documentés : 118 tests Python réussis sur une suite complète, puis 25 tests ciblés après ajout des six tests de supervision commune. Ces compteurs ne constituent pas un nouveau relevé global au 28 octobre. Les contrôles Kafka et la comparaison analytique avant/après ci-dessus sont des validations d’intégration distinctes et ne permettent pas de déduire un nouveau total de tests. La suite complète finale et la CI du commit retenu restent à confirmer.
 
 ## Utilisation
 
@@ -113,10 +123,10 @@ Avec topic, tables, environnement Python et références déjà prêts :
 
 ```bash
 STREAMING_MODE=available_now bash scripts/run_real_pipeline.sh \
-  data/reference/real/collection-eYyLYD
+  data/reference/real/periodic-21SubU
 ```
 
-Ce chemin est celui du lot historique : utiliser les références compatibles avec le lot traité, sans reprendre cet exemple aveuglément pour la collecte du 28 octobre. Il n’est pas recréé par Git. Le mode `available_now` est explicite pour conserver une exécution à la demande. Cette commande traite les données déjà disponibles dans Kafka ; elle ne collecte ni ne publie de nouveaux événements. Conserver les checkpoints existants et ne pas lancer un second traitement sur le même périmètre. Actualiser les deux sources dans Tableau après validation du traitement et de la publication PostgreSQL.
+Ce chemin est celui du référentiel utilisé pour le lot du 28 octobre. Le lot historique utilisait notamment `data/reference/real/collection-eYyLYD`. Ces dossiers locaux ne sont pas recréés par Git : utiliser les références compatibles avec le lot à traiter, sans reprendre un ancien chemin aveuglément. Le mode `available_now` est explicite pour conserver une exécution à la demande. Cette commande traite les données déjà disponibles dans Kafka ; elle ne collecte ni ne publie de nouveaux événements. Conserver les checkpoints existants et ne pas lancer un second traitement sur le même périmètre. Actualiser les deux sources dans Tableau après validation du traitement et de la publication PostgreSQL.
 
 ### Publication réelle et test de non-republication
 
@@ -185,7 +195,7 @@ Le topic de simulation est partagé : un événement envoyé pendant le test act
 - Pour la publication Kafka réelle, le reçu de 100 accusés et le refus de republier un lot déjà `published` ont été vérifiés. La reprise après envoi partiel et les situations `publishing`/`uncertain` restent à valider ; un échec ne justifie pas de remettre aveuglément le lot à `pending` ou d’effacer son registre.
 - Les checkpoints et upserts couvrent les scénarios testés, sans garantie universelle d’exactly-once. La déduplication Silver est bornée par watermark.
 - Le publisher reste limité à 10 000 agrégats par table. Les lignes disparues de Gold ne sont pas automatiquement supprimées de PostgreSQL.
-- Le coût d’un recalcul complet n’a été observé que sur quelques événements. Le Mac de test dispose de 8 Go de RAM ; une pression mémoire jaune et un recours important au swap ont été observés avec les trois jobs et d’autres applications ouvertes. Aucun benchmark de charge soutenue n’est revendiqué.
+- Le coût du recalcul périodique en mode actif n’a été observé que sur quelques événements simulés. Le traitement réel à la demande validé sur 210 observations ne constitue pas un benchmark du mode actif réel. Le Mac de test dispose de 8 Go de RAM ; une pression mémoire jaune et un recours important au swap ont été observés avec les trois jobs et d’autres applications ouvertes. Aucun benchmark de charge soutenue n’est revendiqué.
 - Les dashboards Tableau réels n’ont pas été basculés sur le schéma de test. Metabase reste historique et présent dans Compose. Les alertes, la DLQ Kafka et Airflow ne sont pas implémentés.
 - Ne pas versionner `.env`, secrets, données Delta, checkpoints, logs, reçus de publication ou exports volumineux. Les données et preuves locales de `data/source_checks/` ne sont pas nécessaires au clone du code. Les dossiers locaux `active-stream-*`, `trigger-regression-*` et les verrous des lanceurs doivent être ignorés ; conserver les données nécessaires à la reprise sur le disque.
 
@@ -225,25 +235,35 @@ Le topic de simulation est partagé : un événement envoyé pendant le test act
 - [x] Propagation automatique d’une nouvelle observation simulée jusqu’à PostgreSQL : passage de 3 à 4.
 - [x] Publication réelle d’un lot de 100 observations avec 100 accusés Kafka, offsets `110` à `209`.
 - [x] Refus de republier le même lot déjà terminé : `published_now: false` et offset de fin inchangé à `210`.
-- [x] Capture analytique avant traitement du nouveau lot : 110 observations Silver, 0 rejet et 7/84 agrégats PostgreSQL.
+- [x] Captures analytiques avant/après le lot du 28 octobre : passage de 110 à 210 observations Silver, 0 rejet et de 7/84 à 13/162 agrégats PostgreSQL.
+- [x] Jalon 1 terminé : 110 observations historiques inchangées, exactement 100 nouveaux identifiants et 210 observations représentées dans chacune des deux tables PostgreSQL.
 
 ### Clôture V1 — six jalons bornés
 
 Les composants du socle ci-dessus sont acquis : ils ne sont pas à reconstruire. Cette liste organise le reste à faire ; elle distingue les tâches d’intégration, les validations et les finitions. Une vérification peut confirmer un point déjà réalisé sans nécessiter de nouveau développement. Les sous-points ne sont pas de nouveaux jalons.
 
-Ordre de progression : nouveau lot de bout en bout → session réelle automatique → mesures et reprise → clôture technique et présentation. Aucun pourcentage d’avancement n’est déduit du nombre de cases.
+Jalon 1 terminé le 28 octobre 2026. Prochaine priorité : jalon 2, raccordement et validation de la session réelle automatique. Les jalons 3 à 6 restent à terminer. Aucun pourcentage d’avancement n’est déduit du nombre de cases.
 
-#### Jalon 1 — Valider le nouveau lot réel jusqu’à PostgreSQL
+| Jalon | Statut |
+|---|---|
+| 1 — Nouveau lot réel jusqu’à PostgreSQL | Terminé et validé |
+| 2 — Session réelle automatique | Prochaine étape ; pas encore validée |
+| 3 — Fraîcheur et progression | À terminer |
+| 4 — Reprise réelle active et pannes retenues | À terminer |
+| 5 — Version finale, reproductibilité et sécurité | À terminer |
+| 6 — Tableau, documentation et démonstration | À terminer |
+
+#### Jalon 1 — Valider le nouveau lot réel jusqu’à PostgreSQL — terminé
 
 - [x] Publier 100 observations dans Kafka et vérifier les 100 accusés de réception.
 - [x] Vérifier la non-republication du lot déjà terminé.
 - [x] Capturer l’état analytique avant traitement : 110 observations, 0 rejet, 7/84 agrégats.
-- [ ] Identifier le référentiel GTFS utilisé pour normaliser le nouveau lot.
-- [ ] Exécuter le parcours réel en `available_now`, avec les checkpoints existants.
-- [ ] Contrôler les nouvelles observations Silver : présence, déduplication, enrichissement et rejets éventuels.
-- [ ] Vérifier la conservation des 110 observations historiques et la publication des agrégats dans PostgreSQL, puis comparer les captures avant/après.
+- [x] Identifier le référentiel GTFS du nouveau lot : `data/reference/real/periodic-21SubU`, manifeste conforme à l’empreinte enregistrée.
+- [x] Exécuter le parcours réel en `available_now`, avec les checkpoints existants.
+- [x] Contrôler les nouvelles observations Silver : présence, déduplication, enrichissement et rejets éventuels.
+- [x] Vérifier la conservation des 110 observations historiques et la publication des agrégats dans PostgreSQL, puis comparer les captures avant/après.
 
-Critère de fin : le nouveau lot est validé jusqu’à PostgreSQL, sans perte d’historique. Ne pas confondre le nombre d’agrégats avec le nombre d’observations.
+Critère de fin atteint : 210 observations uniques dans Silver, 0 rejet, 110 observations historiques inchangées et exactement 100 nouveaux identifiants attendus. PostgreSQL contient 13/162 agrégats, chaque table représentant les mêmes 210 observations. Aucun nouvel envoi ni traitement n’est nécessaire pour clôturer ce jalon ; l’actualisation Tableau relève du jalon 6.
 
 #### Jalon 2 — Raccorder et valider la session réelle automatique
 
@@ -256,7 +276,7 @@ Réutiliser le collecteur, la normalisation, le registre et les composants actif
 - [ ] Préserver le mode à la demande et l’isolation entre simulation et réel.
 - [ ] Démontrer le traitement automatique de plusieurs instantanés récents jusqu’à PostgreSQL.
 
-Critère de fin : après lancement, la session réelle progresse sans déclenchement manuel de chaque étape. Un service permanent 24 h/24 et un rafraîchissement automatique de Tableau ne sont pas exigés.
+Critère de fin : après un seul lancement, plusieurs instantanés réels récents atteignent PostgreSQL sans déclenchement manuel de chaque étape. La présence de lots déjà préparés ou une exécution à la demande ne suffit pas à le démontrer. Un service permanent 24 h/24 et un rafraîchissement automatique de Tableau ne sont pas exigés. Les mesures détaillées de fraîcheur et les scénarios de panne restent dans les jalons 3 et 4.
 
 #### Jalon 3 — Mesurer la fraîcheur et suivre la progression
 
