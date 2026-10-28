@@ -1,6 +1,7 @@
 {
     "java.configuration.updateBuildConfiguration": "disabled",
     "python.analysis.extraPaths": [
-        "./spark/src"
+        "./spark/src",
+        "./scripts"
     ]
 }
