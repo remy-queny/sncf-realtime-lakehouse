@@ -176,3 +176,6 @@ docker-volumes/
 # Verrous locaux du traitement réel actif
 /data/.active-real-gold.lock
 /data/.active-real-pipeline.lock
+
+# Fichiers temporaires associés au dashboard Tableau
+.~sncf_real_dashboard*
