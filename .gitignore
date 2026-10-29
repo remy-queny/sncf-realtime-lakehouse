@@ -172,3 +172,7 @@ docker-volumes/
 
 # Archives et registres locaux des collectes SNCF périodiques
 /data/source_checks/periodic-*/
+
+# Verrous locaux du traitement réel actif
+/data/.active-real-gold.lock
+/data/.active-real-pipeline.lock
