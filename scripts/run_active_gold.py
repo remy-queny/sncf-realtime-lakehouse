@@ -40,35 +40,74 @@ def load_postgres_environment():
         os.environ[variable] = value
 
 
-def refresh_if_needed(spark, lakehouse_root, last_published_version):
-    version = get_latest_silver_version(
-        spark, lakehouse_root / "silver/trip_delays"
+def refresh_if_needed(
+    spark,
+    lakehouse_root,
+    last_published_version,
+    *,
+    target_schema="sncf_active_test",
+):
+    validate_postgres_target(
+        lakehouse_root,
+        target_schema,
+        PROJECT_ROOT,
     )
+
+    version = get_latest_silver_version(
+        spark,
+        lakehouse_root / "silver/trip_delays",
+    )
+
     if version == last_published_version:
         return None
+
     return run_gold_cycle(
         spark=spark,
         lakehouse_root=lakehouse_root,
-        target_schema="sncf_active_test",
+        target_schema=target_schema,
         silver_version=version,
     )
 
 
-def run_refresh_loop(spark, lakehouse_root, interval, stop_requested, once=False):
+def run_refresh_loop(
+    spark,
+    lakehouse_root,
+    interval,
+    stop_requested,
+    once=False,
+    *,
+    target_schema="sncf_active_test",
+):
     last_published_version = None
+
     while not stop_requested.is_set():
-        result = refresh_if_needed(spark, lakehouse_root, last_published_version)
+        result = refresh_if_needed(
+            spark,
+            lakehouse_root,
+            last_published_version,
+            target_schema=target_schema,
+        )
+
         if result is None:
             print(
-                f"Silver inchangée : version {last_published_version}, cycle ignoré.",
+                f"Silver inchangée : version {last_published_version}, "
+                "cycle ignoré.",
                 flush=True,
             )
         else:
             last_published_version = result.silver_version
-            print(json.dumps(asdict(result), ensure_ascii=False), flush=True)
-            print("Cycle Gold/PostgreSQL terminé.", flush=True)
+            print(
+                json.dumps(asdict(result), ensure_ascii=False),
+                flush=True,
+            )
+            print(
+                f"Cycle Gold/PostgreSQL terminé : {target_schema}.",
+                flush=True,
+            )
+
         if once:
             break
+
         stop_requested.wait(interval)
 
 def create_interruptible_spark_session(stop_requested):
