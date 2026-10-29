@@ -269,12 +269,19 @@ Critère de fin atteint : 210 observations uniques dans Silver, 0 rejet, 110 obs
 
 Réutiliser le collecteur, la normalisation, le registre et les composants actifs existants ; ne pas reconstruire le mode simulé déjà validé.
 
-- [x] Finaliser la cadence et le volume de collecte selon les contraintes de la source et du Mac.
-- [x] Raccorder et valider collecte → normalisation → publication Kafka sans commande manuelle entre les instantanés.
-- [x] Vérifier la gestion des instantanés inchangés et l’utilisation du registre de publication dans cet enchaînement.
-- [x] Adapter au périmètre réel la supervision Bronze/Silver et le cycle Gold/PostgreSQL, avec les protections de chemins et de schémas.
-- [x] Préserver le mode à la demande et l’isolation entre simulation et réel.
-- [x] Démontrer le traitement automatique de plusieurs instantanés récents jusqu’à PostgreSQL.
+- [x] Définir et valider une configuration de démonstration locale :
+      pause de 120 secondes entre cycles et publication limitée à
+      100 observations par instantané, sur une session de trois cycles.
+- [x] Raccorder et valider collecte → normalisation → publication Kafka
+      sans commande manuelle entre les instantanés.
+- [x] Tester la gestion des instantanés inchangés et du registre,
+      puis valider l’utilisation du registre dans la session réelle.
+- [x] Adapter et valider la supervision Bronze/Silver et le cycle
+      Gold/PostgreSQL réels, avec protections de chemins et de schémas.
+- [x] Conserver le mode à la demande et tester les protections
+      d’isolation entre simulation et réel.
+- [x] Démontrer, après un lancement commun, le traitement automatique
+      de trois instantanés récents jusqu’à PostgreSQL.
 
 Critère de fin : après un seul lancement, plusieurs instantanés réels récents atteignent PostgreSQL sans déclenchement manuel de chaque étape. La présence de lots déjà préparés ou une exécution à la demande ne suffit pas à le démontrer. Un service permanent 24 h/24 et un rafraîchissement automatique de Tableau ne sont pas exigés. Les mesures détaillées de fraîcheur et les scénarios de panne restent dans les jalons 3 et 4.
 
