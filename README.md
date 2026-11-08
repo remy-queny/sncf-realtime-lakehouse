@@ -2,7 +2,7 @@
 
 Projet local de data engineering pour normaliser des observations SNCF GTFS-RT, les traiter dans un lakehouse Delta et restituer des indicateurs de retard dans Tableau.
 
-> État : jalons 1 et 2 terminés. Le parcours réel à la demande a été validé sur 210 observations jusqu’à PostgreSQL, avec conservation exacte des 110 observations historiques et ajout des 100 nouveaux identifiants attendus, sans doublon ni rejet. La session réelle automatique a ensuite été validée sur trois cycles : collecte, normalisation, publication Kafka et traitement jusqu’à PostgreSQL après un lancement commun, sans commande manuelle entre les instantanés. Les 210 observations décrivent la validation du jalon 1, pas le volume final de la session automatique. Tableau reste validé sur le périmètre historique de 110 observations ; son actualisation sur le périmètre étendu reste à vérifier. Prochaine étape : jalon 3, mesure de la fraîcheur et suivi de la progression. Airflow reste en V2.
+> État : jalons 1 et 2 terminés. Le parcours réel à la demande a été validé sur 210 observations jusqu’à PostgreSQL, avec conservation exacte des 110 observations historiques et ajout des 100 nouveaux identifiants attendus, sans doublon ni rejet. La session réelle automatique a ensuite été validée sur trois cycles : collecte, normalisation, publication Kafka et traitement jusqu’à PostgreSQL après un lancement commun, sans commande manuelle entre les instantanés. Les 210 observations décrivent la validation du jalon 1, pas le volume final de la session automatique. Tableau reste validé sur le périmètre historique de 110 observations ; son actualisation sur le périmètre étendu reste à vérifier. Jalon 3 en cours : une session de dix lots a été observée, avec 1 000 identifiants vérifiés et des délais mesurés. Les tests complémentaires du diagnostic et la consolidation du bilan restent à terminer. Mémoire et swap non relevés pendant cette session. Airflow reste en V2.
 
 ## Architecture
 
@@ -191,7 +191,7 @@ Le topic de simulation est partagé : un événement envoyé pendant le test act
 - Les contrôles Silver bloquent avant Gold : doublons, champs requis retenus, conversion secondes/minutes et complétude de `route_id`, `stop_id`, `line_name`, `stop_name`. La complétude ne garantit pas l’exactitude sémantique des noms GTFS ; une anomalie d’enrichissement n’est pas automatiquement déplacée vers les rejets.
 - Le cycle Gold contrôle et agrège une même version Silver avec `versionAsOf`, puis recalcule les cumuls de cet instantané. Les deux écritures Delta et PostgreSQL ne constituent pas une transaction globale ; les échecs partiels restent à tester.
 - Pour le cycle Gold/PostgreSQL, la version Silver publiée est mémorisée uniquement pendant l’exécution : Silver inchangée est ignorée, mais le premier cycle est rejoué après redémarrage. Ce mécanisme est distinct du registre local de publication Kafka. Les erreurs arrêtent le lanceur ; les retries/backoffs du cycle Gold restent à implémenter et tester.
-- La supervision détecte les sorties de processus, pas encore une requête bloquée, une source stagnante ou une fraîcheur insuffisante. Un arrêt normal ne garantit pas le vidage complet du pipeline.
+- La supervision détecte les sorties de processus. Un diagnostic de progression a également été observé pendant la session du jalon 3 ; les tests complémentaires, les seuils et les limites restent à consolider avant de revendiquer la détection fiable d’une source stagnante ou d’une fraîcheur insuffisante. Un diagnostic ne démontre pas à lui seul qu’une requête est bloquée. Un arrêt normal ne garantit pas le vidage complet du pipeline.
 - Pour la publication Kafka réelle, le reçu de 100 accusés et le refus de republier un lot déjà `published` ont été vérifiés. La reprise après envoi partiel et les situations `publishing`/`uncertain` restent à valider ; un échec ne justifie pas de remettre aveuglément le lot à `pending` ou d’effacer son registre.
 - Les checkpoints et upserts couvrent les scénarios testés, sans garantie universelle d’exactly-once. La déduplication Silver est bornée par watermark.
 - Le publisher reste limité à 10 000 agrégats par table. Les lignes disparues de Gold ne sont pas automatiquement supprimées de PostgreSQL.
@@ -242,12 +242,12 @@ Le topic de simulation est partagé : un événement envoyé pendant le test act
 
 Les composants du socle ci-dessus sont acquis : ils ne sont pas à reconstruire. Cette liste organise le reste à faire ; elle distingue les tâches d’intégration, les validations et les finitions. Une vérification peut confirmer un point déjà réalisé sans nécessiter de nouveau développement. Les sous-points ne sont pas de nouveaux jalons.
 
-Jalon 1 terminé le 28 octobre 2026. Jalon 2 également terminé : la session réelle automatique a été validée sur trois cycles, après un lancement commun et sans commande manuelle entre les instantanés. Prochaine priorité : jalon 3, mesure de la fraîcheur et suivi de la progression. Les jalons 3 à 6 restent à terminer. Aucun pourcentage d’avancement n’est déduit du nombre de cases.
+Jalon 1 terminé le 28 octobre 2026. Jalon 2 également terminé : la session réelle automatique a été validée sur trois cycles, après un lancement commun et sans commande manuelle entre les instantanés. Priorité actuelle : terminer le jalon 3, mesure de la fraîcheur et suivi de la progression. Les jalons 3 à 6 restent à terminer. Aucun pourcentage d’avancement n’est déduit du nombre de cases.
 
 | Jalon | Statut |
 |---|---|
 | 1 — Nouveau lot réel jusqu’à PostgreSQL | Terminé et validé |
-| 2 — Session réelle automatique | Prochaine étape ; pas encore validée |
+| 2 — Session réelle automatique | Terminé et validé le 29 octobre 2026 |
 | 3 — Fraîcheur et progression | À terminer |
 | 4 — Reprise réelle active et pannes retenues | À terminer |
 | 5 — Version finale, reproductibilité et sécurité | À terminer |
@@ -287,14 +287,29 @@ Jalon 2 terminé et validé le 29 octobre 2026. Une session commune a collecté 
 
 Critère de fin : après un seul lancement, plusieurs instantanés réels récents atteignent PostgreSQL sans déclenchement manuel de chaque étape. La présence de lots déjà préparés ou une exécution à la demande ne suffit pas à le démontrer. Un service permanent 24 h/24 et un rafraîchissement automatique de Tableau ne sont pas exigés. Les mesures détaillées de fraîcheur et les scénarios de panne restent dans les jalons 3 et 4.
 
-#### Jalon 3 — Mesurer la fraîcheur et suivre la progression
+#### Jalon 3 — Mesurer la fraîcheur et suivre la progression — en cours
 
-- [ ] Mesurer séparément la fraîcheur source → PostgreSQL et le délai collecteur → PostgreSQL.
-- [ ] Conserver les horodatages et informations de progression nécessaires : dernière collecte, publication Kafka, traitement et publication analytique.
-- [ ] Distinguer une source inchangée d’un pipeline bloqué et définir des seuils simples pour signaler l’absence de progression.
-- [ ] Observer une session plus longue et un volume supérieur aux petits essais : mémoire, swap, durée des cycles et retard éventuel.
+Point de reprise du 8 novembre 2026 : le jalon n’est pas encore clôturé.
 
-Critère de fin : présenter des délais mesurés et les limites observées, sans confondre durée d’un cycle Gold et latence de bout en bout. Définir un objectif de fraîcheur adapté aux mesures, sans promettre un délai non démontré.
+Bilan provisoire de la session, d’après les contrôles rapportés :
+
+- Dix lots ont été traités et 1 000 identifiants ont été vérifiés.
+- Des délais ont été mesurés et le diagnostic a été observé pendant la session réelle.
+- Les valeurs chiffrées, les bornes de mesure et les preuves correspondantes restent à consolider dans le bilan final. Les 1 000 identifiants ne sont pas présentés comme un nouveau total historique Silver/PostgreSQL.
+- La mémoire et le swap n’ont pas été relevés pendant cet essai : consommation mémoire, absence de swap et tenue en charge ne sont pas validées. Aucune mesure rétrospective n’est déduite de l’état du Mac après l’arrêt.
+
+Travaux restant à clôturer :
+
+- [ ] Consolider les mesures en distinguant fraîcheur source → PostgreSQL et délai collecteur → PostgreSQL, sans les confondre avec la durée d’un cycle Gold.
+- [ ] Documenter les horodatages et les informations de progression disponibles : collecte, publication Kafka, traitement et publication analytique.
+- [ ] Compléter les tests du diagnostic : source sans nouvel instantané, absence de signal et dépassement des seuils ; distinguer ces situations sans conclure automatiquement à un blocage.
+- [ ] Documenter les seuils configurables, les résultats et les limites ; définir un objectif local de fraîcheur fondé sur les mesures, pas une garantie de délai.
+- [ ] Relancer les tests concernés, vérifier les modifications et préparer les commits.
+- [ ] Observation mémoire/swap : non réalisée pendant cette session ; conserver cette limite explicite dans le bilan, sans présenter ce contrôle comme validé.
+
+La session de dix lots ne sera pas relancée uniquement pour récupérer les mesures mémoire/swap manquantes. Aucun nouveau service ni nouvelle fonctionnalité n’est ajouté au périmètre de clôture de ce jalon.
+
+Critère de fin : présenter des délais mesurés et leurs bornes, un diagnostic couvert par les scénarios retenus et les limites observées. La clôture doit expliciter le contrôle mémoire/swap non réalisé, sans revendiquer de benchmark de charge soutenue.
 
 #### Jalon 4 — Valider la reprise réelle active et les pannes retenues
 
