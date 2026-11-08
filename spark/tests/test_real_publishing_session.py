@@ -41,10 +41,13 @@ def setup(tmp_path, monkeypatch):
         "indexed_snapshots": 1,
         "indexed_events": 100,
     })
-    publish = Mock(return_value={
-        "published_batches": 1,
-        "published_events": 100,
-    })
+    publish = Mock(
+        return_value={
+            "published_batches": 1,
+            "published_events": 100,
+            "skipped_published_batches": 0,
+        }
+    )
 
     monkeypatch.setattr(cycle, "normalize_pending", normalize)
     monkeypatch.setattr(cycle, "run_publication_cycle", publish)
@@ -83,7 +86,11 @@ def test_each_collection_cycle_normalizes_then_publishes(setup):
 
     def published(*args, **kwargs):
         events.append("publish")
-        return {"published_batches": 1, "published_events": 100}
+        return {
+            "published_batches": 1,
+            "published_events": 100,
+            "skipped_published_batches": 0,
+        }
 
     normalize.side_effect = normalized
     publish.side_effect = published
@@ -102,6 +109,7 @@ def test_unchanged_snapshot_still_checks_publication_registry(setup):
     publish.return_value = {
         "published_batches": 0,
         "published_events": 0,
+        "skipped_published_batches": 1,
     }
 
     result = run(setup, Mock(), cycles=2)

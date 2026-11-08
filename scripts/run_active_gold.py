@@ -8,6 +8,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 from threading import Event
+from datetime import datetime, timezone
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "spark/src"))
@@ -81,6 +82,12 @@ def run_refresh_loop(
     last_published_version = None
 
     while not stop_requested.is_set():
+        print(json.dumps({
+            "stage": "gold_check_started",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "target_schema": target_schema,
+        }, ensure_ascii=False), flush=True)
+
         result = refresh_if_needed(
             spark,
             lakehouse_root,
@@ -104,6 +111,14 @@ def run_refresh_loop(
                 f"Cycle Gold/PostgreSQL terminé : {target_schema}.",
                 flush=True,
             )
+
+        print(json.dumps({
+            "stage": "gold_check_completed",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "target_schema": target_schema,
+            "publication_performed": result is not None,
+            "last_published_silver_version": last_published_version,
+        }, ensure_ascii=False), flush=True)
 
         if once:
             break

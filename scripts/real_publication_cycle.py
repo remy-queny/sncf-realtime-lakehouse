@@ -9,6 +9,9 @@ import time
 from normalize_real_snapshots import normalize_pending
 from run_active_real_collection import run_session
 
+import json
+from datetime import datetime, timezone
+
 def run_publication_cycle(
     collection_root,
     project_root,
@@ -73,6 +76,39 @@ def run_publication_cycle(
         "publications": publications,
     }
 
+def publish_with_progress(
+    collection_root,
+    project_root,
+    *,
+    limit=100,
+    bootstrap_servers="localhost:9092",
+    reporter=print,
+):
+    started = time.monotonic()
+
+    reporter(json.dumps({
+        "stage": "kafka_publication_started",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }, ensure_ascii=False))
+
+    result = run_publication_cycle(
+        collection_root,
+        project_root,
+        limit=limit,
+        bootstrap_servers=bootstrap_servers,
+    )
+
+    reporter(json.dumps({
+        "stage": "kafka_publication_completed",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "duration_seconds": time.monotonic() - started,
+        "published_batches": result["published_batches"],
+        "published_events": result["published_events"],
+        "skipped_published_batches": result["skipped_published_batches"],
+    }, ensure_ascii=False))
+
+    return result
+
 def run_publishing_session(
     source,
     collection_root,
@@ -110,11 +146,12 @@ def run_publishing_session(
             root, archive, references, export
         )
 
-        publication = run_publication_cycle(
+        publication = publish_with_progress(
             root,
             project_root,
             limit=limit,
             bootstrap_servers=bootstrap_servers,
+            reporter=reporter,
         )
 
         published_batches += publication["published_batches"]

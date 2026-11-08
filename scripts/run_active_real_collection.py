@@ -11,6 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
+from datetime import datetime, timezone
 
 
 RAW_MAIN = "fr.remyqueny.sncf.producer.GtfsRealtimeCollectorApplication"
@@ -69,6 +70,30 @@ def session_configuration(source, archive, references):
         },
     }
 
+def collect_with_progress(source, root, collect, reporter):
+    root = Path(root)
+    registry = root / "registry"
+    before = {path.name for path in registry.glob("*.json")}
+
+    started = time.monotonic()
+    reporter(json.dumps({
+        "stage": "collection_started",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }, ensure_ascii=False))
+
+    collect(source, root)
+
+    completed_at = datetime.now(timezone.utc).isoformat()
+    duration = time.monotonic() - started
+    after = {path.name for path in registry.glob("*.json")}
+
+    reporter(json.dumps({
+        "stage": "collection_completed",
+        "timestamp": completed_at,
+        "duration_seconds": duration,
+        "registered_snapshot_count": len(after),
+        "new_snapshot_count": len(after - before),
+    }, ensure_ascii=False))
 
 def run_session(
     source, collection_root, gtfs_archive, reference_root,
@@ -108,7 +133,7 @@ def run_session(
         for cycle in range(1, cycles + 1):
             if session_configuration(source, archive, references) != configuration:
                 raise ValueError("Les références ont changé pendant la session.")
-            collect(source, root)
+            collect_with_progress(source, root, collect, reporter)
             latest = normalizer(root, archive, references, exporter)
             total_new += latest["newly_normalized"]
             reporter(json.dumps({"stage": "cycle", "cycle": cycle, **latest}, ensure_ascii=False))

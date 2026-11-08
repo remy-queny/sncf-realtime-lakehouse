@@ -147,3 +147,92 @@ def test_stop_handlers_are_installed_after_spark_creation():
         None,
     )
     assert stop_requested.is_set()
+
+def test_progress_distinguishes_publication_from_unchanged_silver(
+    cycle_result, capsys
+):
+    import json
+
+    stop = Mock()
+    stop.is_set.side_effect = [False, False, True]
+
+    with patch.object(
+        runner,
+        "refresh_if_needed",
+        side_effect=[cycle_result, None],
+    ):
+        runner.run_refresh_loop(
+            Mock(), ROOT, 60, stop
+        )
+
+    events = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{")
+    ]
+    progress = [
+        event for event in events
+        if event.get("stage") in {
+            "gold_check_started",
+            "gold_check_completed",
+        }
+    ]
+
+    assert [event["stage"] for event in progress] == [
+        "gold_check_started",
+        "gold_check_completed",
+        "gold_check_started",
+        "gold_check_completed",
+    ]
+
+    completed = [
+        event for event in progress
+        if event["stage"] == "gold_check_completed"
+    ]
+
+    assert [event["publication_performed"] for event in completed] == [
+        True, False
+    ]
+    assert [
+        event["last_published_silver_version"]
+        for event in completed
+    ] == [cycle_result.silver_version] * 2
+
+    assert all(
+        event["timestamp"].endswith("+00:00")
+        for event in progress
+    )
+    assert all("silver_version" not in event for event in progress)
+
+    publications = [
+        event for event in events if "silver_version" in event
+    ]
+    assert len(publications) == 1
+
+
+def test_failed_gold_check_does_not_report_completion(capsys):
+    import json
+
+    stop = Mock()
+    stop.is_set.return_value = False
+
+    with patch.object(
+        runner,
+        "refresh_if_needed",
+        side_effect=RuntimeError("Échec Gold"),
+    ):
+        with pytest.raises(RuntimeError, match="Échec Gold"):
+            runner.run_refresh_loop(
+                Mock(), ROOT, 60, stop, once=True
+            )
+
+    events = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{")
+    ]
+
+    assert [event["stage"] for event in events] == [
+        "gold_check_started"
+    ]
+    stop.wait.assert_not_called()
