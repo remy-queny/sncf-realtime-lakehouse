@@ -2,7 +2,7 @@
 
 Projet local de data engineering pour normaliser des observations SNCF GTFS-RT, les traiter dans un lakehouse Delta et restituer des indicateurs de retard dans Tableau.
 
-> État au 28 octobre 2026 : jalon 1 terminé. Le parcours réel à la demande est validé sur 210 observations jusqu’à PostgreSQL, avec conservation exacte des 110 observations historiques et ajout des 100 nouveaux identifiants attendus, sans doublon ni rejet. Tableau reste validé sur le périmètre historique de 110 observations ; son actualisation sur le nouveau périmètre n’a pas encore été vérifiée. Le mode actif supervisé est démontré en simulation sur 4 observations. Prochaine étape : jalon 2, raccordement et validation de la session réelle automatique. Airflow reste en V2.
+> État : jalons 1 et 2 terminés. Le parcours réel à la demande a été validé sur 210 observations jusqu’à PostgreSQL, avec conservation exacte des 110 observations historiques et ajout des 100 nouveaux identifiants attendus, sans doublon ni rejet. La session réelle automatique a ensuite été validée sur trois cycles : collecte, normalisation, publication Kafka et traitement jusqu’à PostgreSQL après un lancement commun, sans commande manuelle entre les instantanés. Les 210 observations décrivent la validation du jalon 1, pas le volume final de la session automatique. Tableau reste validé sur le périmètre historique de 110 observations ; son actualisation sur le périmètre étendu reste à vérifier. Prochaine étape : jalon 3, mesure de la fraîcheur et suivi de la progression. Airflow reste en V2.
 
 ## Architecture
 
@@ -15,7 +15,7 @@ Java → Kafka → PySpark → Delta Lake Bronze / Silver / Gold → PostgreSQL 
 - Gold : agrégats par ligne/fenêtre de 15 minutes et par arrêt/jour.
 - PostgreSQL : publication des agrégats pour la BI ; Tableau utilise deux sources distinctes.
 
-Deux modes coexistent : à la demande, Bronze/Silver utilisent `availableNow=True` ; en mode actif de simulation, ils restent en micro-batches et un cycle périodique actualise Gold/PostgreSQL à partir d’une version Silver figée.
+Deux modes coexistent : à la demande, Bronze/Silver utilisent `availableNow=True` et traitent les données disponibles avant de s’arrêter ; en mode actif, ils restent en micro-batches et un cycle périodique actualise Gold/PostgreSQL à partir d’une version Silver figée. Le parcours réel actif intègre également la collecte, la normalisation et la publication Kafka automatiques. Il a été validé sur une session locale de trois cycles ; cela ne constitue pas une validation de fonctionnement permanent ni une mesure de latence de bout en bout. L’actualisation de l’affichage Tableau reste manuelle.
 
 Stack : Java 17, Kafka 4.1.0, PySpark 3.5.3, Delta Lake 3.2.0, PostgreSQL 17, Tableau Desktop, Docker Compose, JUnit, pytest et GitHub Actions. Exécution locale sur Mac, sans dépendance cloud.
 
@@ -242,7 +242,7 @@ Le topic de simulation est partagé : un événement envoyé pendant le test act
 
 Les composants du socle ci-dessus sont acquis : ils ne sont pas à reconstruire. Cette liste organise le reste à faire ; elle distingue les tâches d’intégration, les validations et les finitions. Une vérification peut confirmer un point déjà réalisé sans nécessiter de nouveau développement. Les sous-points ne sont pas de nouveaux jalons.
 
-Jalon 1 terminé le 28 octobre 2026. Prochaine priorité : jalon 2, raccordement et validation de la session réelle automatique. Les jalons 3 à 6 restent à terminer. Aucun pourcentage d’avancement n’est déduit du nombre de cases.
+Jalon 1 terminé le 28 octobre 2026. Jalon 2 également terminé : la session réelle automatique a été validée sur trois cycles, après un lancement commun et sans commande manuelle entre les instantanés. Prochaine priorité : jalon 3, mesure de la fraîcheur et suivi de la progression. Les jalons 3 à 6 restent à terminer. Aucun pourcentage d’avancement n’est déduit du nombre de cases.
 
 | Jalon | Statut |
 |---|---|
@@ -282,6 +282,8 @@ Réutiliser le collecteur, la normalisation, le registre et les composants actif
       d’isolation entre simulation et réel.
 - [x] Démontrer, après un lancement commun, le traitement automatique
       de trois instantanés récents jusqu’à PostgreSQL.
+
+Jalon 2 terminé et validé le 29 octobre 2026. Une session commune a collecté trois instantanés distincts et ajouté automatiquement 300 observations jusqu’à PostgreSQL. Les 510 observations historiques sont conservées sans modification. État final : 810 observations Silver uniques, aucun rejet, 34 agrégats ligne/fenêtre et 232 agrégats arrêt/jour, chaque table PostgreSQL représentant les mêmes 810 observations. Arrêt du superviseur en code 0.
 
 Critère de fin : après un seul lancement, plusieurs instantanés réels récents atteignent PostgreSQL sans déclenchement manuel de chaque étape. La présence de lots déjà préparés ou une exécution à la demande ne suffit pas à le démontrer. Un service permanent 24 h/24 et un rafraîchissement automatique de Tableau ne sont pas exigés. Les mesures détaillées de fraîcheur et les scénarios de panne restent dans les jalons 3 et 4.
 
