@@ -130,3 +130,46 @@ def test_incorrect_target_is_rejected_before_spark_access():
     with pytest.raises(ValueError):
         gold_cycle.run_gold_cycle(spark, gold_cycle.PROJECT_ROOT / "data/lakehouse_real", "sncf_active_test")
     spark.conf.get.assert_not_called()
+
+def test_cycle_timestamps_bracket_postgres_publication():
+    from datetime import datetime, timezone
+    import json
+    from dataclasses import asdict
+
+    with ExitStack() as stack:
+        spark, silver, lines, stations, patches = cycle_setup(stack)
+        publication_times = {}
+
+        def publish(**kwargs):
+            publication_times["entered_at"] = datetime.now(timezone.utc)
+            publication_times["returned_at"] = datetime.now(timezone.utc)
+            return 2, 3
+
+        patches["publish_gold_dataframes"].side_effect = publish
+
+        result = gold_cycle.run_gold_cycle(
+            spark,
+            gold_cycle.PROJECT_ROOT / "data/lakehouse",
+            "public",
+        )
+
+        assert result.cycle_started_at is not None
+        assert result.postgres_published_at is not None
+
+        started_at = datetime.fromisoformat(result.cycle_started_at)
+        published_at = datetime.fromisoformat(result.postgres_published_at)
+
+        assert started_at.utcoffset().total_seconds() == 0
+        assert published_at.utcoffset().total_seconds() == 0
+
+        assert (
+            started_at
+            <= publication_times["entered_at"]
+            <= publication_times["returned_at"]
+            <= published_at
+        )
+        assert result.duration_seconds >= 0
+
+        payload = json.loads(json.dumps(asdict(result)))
+        assert payload["cycle_started_at"] == result.cycle_started_at
+        assert payload["postgres_published_at"] == result.postgres_published_at

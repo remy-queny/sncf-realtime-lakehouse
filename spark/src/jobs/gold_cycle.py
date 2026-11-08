@@ -17,6 +17,8 @@ from jobs.postgres_target import validate_postgres_target
 from jobs.publish_postgres import MAX_ROWS_PER_TABLE, publish_gold_dataframes
 from transforms.gold import aggregate_delay_by_line, aggregate_station_delay_daily
 
+from datetime import datetime, timezone
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -27,6 +29,8 @@ class GoldCycleResult:
     line_aggregate_count: int
     station_aggregate_count: int
     duration_seconds: float
+    cycle_started_at: str | None = None
+    postgres_published_at: str | None = None
 
 
 def get_latest_silver_version(spark: SparkSession, silver_path: Path) -> int:
@@ -74,6 +78,7 @@ def run_gold_cycle(
     if spark.conf.get("spark.sql.session.timeZone") != "UTC":
         raise ValueError("Le cycle Gold exige une session Spark configurée en UTC.")
 
+    cycle_started_at = datetime.now(timezone.utc)
     started_at = monotonic()
     silver_path = root / "silver/trip_delays"
     version = (
@@ -127,12 +132,16 @@ def run_gold_cycle(
             target_schema=target_schema,
         )
 
+        postgres_published_at = datetime.now(timezone.utc)
+
         return GoldCycleResult(
             silver_version=version,
             observation_count=observation_count,
             line_aggregate_count=line_count,
             station_aggregate_count=station_count,
             duration_seconds=monotonic() - started_at,
+            cycle_started_at=cycle_started_at.isoformat(),
+            postgres_published_at=postgres_published_at.isoformat(),
         )
     finally:
         for frame in reversed(cached):
