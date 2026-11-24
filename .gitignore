@@ -179,3 +179,5 @@ docker-volumes/
 
 # Fichiers temporaires associés au dashboard Tableau
 .~sncf_real_dashboard*
+
+/ENTRETIEN_TECHNIQUE.md
